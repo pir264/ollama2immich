@@ -2,9 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Conventions
+
+- This is a .NET project. Always target the latest .NET version specified in `global.json` or `.csproj` files.
+- Prefer structured JSON outputs from LLM integrations rather than parsing free-text responses.
+
+## Git
+
+- Always place `.gitignore` in the repository root directory, not in subdirectories.
+- When initializing Git repos, verify the `.gitignore` location before committing.
+
+## LLM Integration
+
+- When integrating with LLM APIs (e.g., Ollama), always use structured/JSON output mode rather than parsing free-text.
+- Ensure prompts explicitly instruct the model to respond in English to avoid localization issues.
+
 ## What this project does
 
-`ollama2immich` is a .NET 8 console application that iterates over all image assets in an [Immich](https://immich.app/) photo library, sends each thumbnail to a local [Ollama](https://ollama.ai/) vision model (default: `llava`), and writes the generated description and keyword tags back to Immich.
+`ollama2immich` is a .NET 10 console application that iterates over all image assets in an [Immich](https://immich.app/) photo library, sends each thumbnail to a local [Ollama](https://ollama.ai/) vision model (default: `llava`), and writes the generated description and keyword tags back to Immich.
 
 ## Commands
 
