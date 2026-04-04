@@ -27,9 +27,17 @@ Maak een bestand `appsettings.Local.json` aan in de projectmap (naast `appsettin
 }
 ```
 
-De Immich API-key vind je in de Immich-webinterface onder **Account Settings → API Keys**.
+De Immich API-key vind je in de Immich-webinterface onder **Account Settings → API Keys**. De key heeft minimaal de volgende scopes nodig:
 
-Alle beschikbare instellingen (met hun standaardwaarden):
+| Scope | Waarvoor |
+|---|---|
+| `asset.read` | Metadata en thumbnails ophalen |
+| `asset.view` | Thumbnail-afbeelding downloaden |
+| `asset.update` | Beschrijving terugschrijven |
+| `tag.read` | Bestaande tags ophalen |
+| `tag.create` | Nieuwe tags aanmaken |
+
+### Alle beschikbare instellingen
 
 ```json
 {
@@ -39,7 +47,8 @@ Alle beschikbare instellingen (met hun standaardwaarden):
   },
   "Ollama": {
     "BaseUrl": "http://localhost:11434",
-    "Model": "llava"
+    "Model": "llava",
+    "Prompt": "Bekijk deze foto aandachtig. Schrijf een natuurlijke beschrijving van 1-2 zinnen in het Nederlands van wat je ziet. Geef daarna maximaal 10 korte trefwoorden in het Nederlands (objecten, personen, plaatsen, sfeer, kleuren)."
   },
   "Processing": {
     "ConcurrentAssets": 2,
@@ -47,6 +56,8 @@ Alle beschikbare instellingen (met hun standaardwaarden):
   }
 }
 ```
+
+De prompt is volledig aanpasbaar via `Ollama:Prompt`. Het model antwoordt altijd in een vast JSON-formaat dankzij [structured outputs](https://docs.ollama.com/capabilities/structured-outputs) — de prompt hoeft geen opmaakregels te bevatten.
 
 Instellingen kunnen ook als omgevingsvariabele worden meegegeven, met `__` als scheidingsteken:
 
@@ -74,6 +85,6 @@ Het binaire bestand staat daarna in `bin/Release/net10.0/publish/`.
 ## Werking
 
 1. Alle bestaande Immich-tags worden eenmalig opgehaald en gecacht.
-2. Assets worden gepagineerd opgehaald en verwerkt met een instelbare concurrentie (`ConcurrentAssets`).
-3. Per foto: thumbnail downloaden → naar Ollama sturen → beschrijving en tags terugschrijven naar Immich.
+2. Assets worden gepagineerd opgehaald via `POST /api/search/metadata` met een instelbare concurrentie (`ConcurrentAssets`).
+3. Per foto: thumbnail downloaden → via Ollama analyseren met structured output → beschrijving en tags terugschrijven naar Immich.
 4. Nieuwe tags worden aangemaakt als ze nog niet bestaan.

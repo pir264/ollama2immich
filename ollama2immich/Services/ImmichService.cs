@@ -16,17 +16,19 @@ public class ImmichService(HttpClient httpClient)
         int page = 1;
         while (true)
         {
-            var response = await httpClient.GetAsync($"api/assets?page={page}&size={pageSize}");
+            var body = JsonContent.Create(new { page, size = pageSize, withExif = true });
+            var response = await httpClient.PostAsync("api/search/metadata", body);
             response.EnsureSuccessStatusCode();
 
-            var assets = await response.Content.ReadFromJsonAsync<ImmichAsset[]>(JsonOptions);
-            if (assets is null || assets.Length == 0)
+            var result = await response.Content.ReadFromJsonAsync<ImmichSearchResponse>(JsonOptions);
+            var items = result?.Assets.Items;
+            if (items is null || items.Length == 0)
                 yield break;
 
-            foreach (var asset in assets)
+            foreach (var asset in items)
                 yield return asset;
 
-            if (assets.Length < pageSize)
+            if (result!.Assets.NextPage is null)
                 yield break;
 
             page++;

@@ -55,3 +55,4 @@ nunit-*.xml
 
 # Local settings (contains secrets)
 appsettings.Local.json
+.claude/
