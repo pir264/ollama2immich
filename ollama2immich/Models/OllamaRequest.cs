@@ -1,0 +1,10 @@
+using System.Text.Json.Serialization;
+
+namespace ollama2immich.Models;
+
+public record OllamaRequest(
+    [property: JsonPropertyName("model")] string Model,
+    [property: JsonPropertyName("prompt")] string Prompt,
+    [property: JsonPropertyName("images")] string[] Images,
+    [property: JsonPropertyName("stream")] bool Stream
+);
