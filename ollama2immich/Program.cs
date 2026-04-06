@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using ollama2immich.Services;
 
 bool resetMode = args.Contains("--reset", StringComparer.OrdinalIgnoreCase);
+bool tagExistingMode = args.Contains("--tag-existing", StringComparer.OrdinalIgnoreCase);
 
 var host = Host.CreateDefaultBuilder(args)
     .ConfigureAppConfiguration(config => config
@@ -18,11 +19,14 @@ var host = Host.CreateDefaultBuilder(args)
         var immichKey   = cfg["Immich:ApiKey"] ?? string.Empty;
         var ollamaBase   = cfg["Ollama:BaseUrl"]?.TrimEnd('/') + "/";
         var ollamaModel  = cfg["Ollama:Model"] ?? "llava";
-        var ollamaPrompt = cfg["Ollama:Prompt"] ?? string.Empty;
+        var ollamaPrompt = tagExistingMode
+            ? cfg["Ollama:TagExistingPrompt"] ?? string.Empty
+            : cfg["Ollama:Prompt"] ?? string.Empty;
 
         if (!resetMode && string.IsNullOrWhiteSpace(ollamaPrompt))
         {
-            Console.Error.WriteLine("ERROR: Ollama:Prompt is not set in appsettings.json.");
+            var promptKey = tagExistingMode ? "Ollama:TagExistingPrompt" : "Ollama:Prompt";
+            Console.Error.WriteLine($"ERROR: {promptKey} is not set in appsettings.json.");
             Environment.Exit(1);
         }
 
@@ -71,12 +75,20 @@ int pageSize   = int.TryParse(config["Processing:PageSize"], out var p) ? p : 50
 Console.WriteLine("ollama2immich starting...");
 Console.WriteLine($"  Immich : {config["Immich:BaseUrl"]}");
 Console.WriteLine($"  Ollama : {config["Ollama:BaseUrl"]} (model: {config["Ollama:Model"]})");
+Console.WriteLine($"  Mode   : {(tagExistingMode ? "tag-existing (match existing tags, no new tags or descriptions)" : "normal")}");
 Console.WriteLine($"  Concurrency: {concurrent}, Page size: {pageSize}");
 Console.WriteLine();
 
 // Cache existing tags to avoid repeated GET /api/tags
 var existingTags = (await immich.GetTagsAsync())
-    .ToDictionary(t => t.Name.ToLowerInvariant(), t => t.Id);
+    .GroupBy(t => t.Name.ToLowerInvariant())
+    .ToDictionary(g => g.Key, g => g.First().Id);
+
+if (tagExistingMode && existingTags.Count == 0)
+{
+    Console.WriteLine("No existing tags found in Immich. Run in normal mode first to generate tags.");
+    return;
+}
 
 int processed = 0, skipped = 0, failed = 0;
 
@@ -85,15 +97,13 @@ var tasks = new List<Task>();
 
 await foreach (var asset in immich.GetAllAssetsAsync(pageSize))
 {
-    // Only process image assets
     if (!string.Equals(asset.Type, "IMAGE", StringComparison.OrdinalIgnoreCase))
     {
         skipped++;
         continue;
     }
 
-    // Skip if already has a description
-    if (!string.IsNullOrWhiteSpace(asset.ExifInfo?.Description))
+    if (!tagExistingMode && !string.IsNullOrWhiteSpace(asset.ExifInfo?.Description))
     {
         skipped++;
         continue;
@@ -109,23 +119,46 @@ await foreach (var asset in immich.GetAllAssetsAsync(pageSize))
             Console.WriteLine($"[->] Processing {assetId}");
 
             var thumbnail = await immich.GetThumbnailAsync(assetId);
-            var (description, tags) = await ollama.AnalyzeImageAsync(thumbnail);
 
-            await immich.UpdateDescriptionAsync(assetId, description);
-
-            foreach (var tag in tags)
+            if (tagExistingMode)
             {
-                var tagKey = tag.ToLowerInvariant();
-                if (!existingTags.TryGetValue(tagKey, out var tagId))
+                var tagNames = existingTags.Keys.ToArray();
+                var matchedTags = await ollama.SelectTagsAsync(thumbnail, tagNames);
+
+                var assignedTags = new List<string>();
+                foreach (var tag in matchedTags)
                 {
-                    var created = await immich.CreateTagAsync(tag);
-                    tagId = created.Id;
-                    existingTags[tagKey] = tagId;
+                    var tagKey = tag.ToLowerInvariant();
+                    if (existingTags.TryGetValue(tagKey, out var tagId))
+                    {
+                        await immich.AssignTagToAssetAsync(tagId, assetId);
+                        assignedTags.Add(tag);
+                    }
                 }
-                await immich.AssignTagToAssetAsync(tagId, assetId);
+
+                Console.WriteLine($"[OK] {assetId}: tags: {string.Join(", ", assignedTags)}");
+            }
+            else
+            {
+                var (description, tags) = await ollama.AnalyzeImageAsync(thumbnail);
+
+                await immich.UpdateDescriptionAsync(assetId, description);
+
+                foreach (var tag in tags)
+                {
+                    var tagKey = tag.ToLowerInvariant();
+                    if (!existingTags.TryGetValue(tagKey, out var tagId))
+                    {
+                        var created = await immich.CreateTagAsync(tag);
+                        tagId = created.Id;
+                        existingTags[tagKey] = tagId;
+                    }
+                    await immich.AssignTagToAssetAsync(tagId, assetId);
+                }
+
+                Console.WriteLine($"[OK] {assetId}: \"{description}\" | tags: {string.Join(", ", tags)}");
             }
 
-            Console.WriteLine($"[OK] {assetId}: \"{description}\" | tags: {string.Join(", ", tags)}");
             Interlocked.Increment(ref processed);
         }
         catch (Exception ex)

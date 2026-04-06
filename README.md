@@ -1,5 +1,7 @@
 # ollama2immich
 
+> [🇬🇧 English version](README.en.md)
+
 Een verzameling .NET 10 tools om een [Immich](https://immich.app/) fotobibliotheek automatisch te verrijken en te organiseren met behulp van een lokaal [Ollama](https://ollama.com/) taalmodel.
 
 ## Projecten
@@ -28,11 +30,22 @@ Itereert over alle foto's in de Immich bibliotheek, stuurt elke thumbnail naar e
 
 ### Werking
 
+De tool heeft drie modi:
+
+**Normale modus** (`dotnet run`)
 1. Alle bestaande Immich-tags worden eenmalig opgehaald en gecacht.
 2. Assets worden gepagineerd opgehaald; niet-afbeeldingen en al beschreven foto's worden overgeslagen.
 3. Per foto: thumbnail ophalen → via Ollama analyseren (structured output) → beschrijving en tags terugschrijven.
 4. Nieuwe tags worden aangemaakt als ze nog niet bestaan.
-5. Met `--reset` worden alle beschrijvingen en tags gewist, zodat de verwerking opnieuw kan starten.
+
+**Tag-existing modus** (`dotnet run -- --tag-existing`)
+1. Alle bestaande Immich-tags worden opgehaald.
+2. Per foto stuurt Ollama de thumbnail samen met de lijst bestaande tagnamen; het model kiest welke tags van toepassing zijn.
+3. Alleen passende bestaande tags worden gekoppeld — er worden geen nieuwe tags aangemaakt en de beschrijving wordt niet gewijzigd.
+4. Geschikt als de taghiërarchie al is opgebouwd (via `immich-tag-manager`) en elke foto nog aan de juiste tags gekoppeld moet worden.
+
+**Reset modus** (`dotnet run -- --reset`)
+Alle beschrijvingen en tags worden gewist zodat de verwerking opnieuw kan starten.
 
 ### Configuratie
 
@@ -81,8 +94,11 @@ De Immich API-key heeft minimaal deze scopes nodig:
 ```bash
 cd ollama2immich
 
-# Foto's verwerken
+# Foto's verwerken (beschrijving + nieuwe tags genereren)
 dotnet run
+
+# Bestaande tags koppelen aan foto's (geen nieuwe tags of beschrijvingen)
+dotnet run -- --tag-existing
 
 # Alle beschrijvingen en tags wissen (handig voor testen)
 dotnet run -- --reset

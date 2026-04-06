@@ -11,7 +11,7 @@ public class OllamaService(HttpClient httpClient, string model, string prompt)
         PropertyNameCaseInsensitive = true
     };
 
-    private static readonly object Schema = new
+    private static readonly object AnalyzeSchema = new
     {
         type = "object",
         properties = new
@@ -22,12 +22,22 @@ public class OllamaService(HttpClient httpClient, string model, string prompt)
         required = new[] { "description", "tags" }
     };
 
+    private static readonly object SelectSchema = new
+    {
+        type = "object",
+        properties = new
+        {
+            tags = new { type = "array", items = new { type = "string" } }
+        },
+        required = new[] { "tags" }
+    };
+
     private static readonly object Options = new { temperature = 0 };
 
     public async Task<(string Description, string[] Tags)> AnalyzeImageAsync(byte[] imageBytes)
     {
         var base64 = Convert.ToBase64String(imageBytes);
-        var request = new OllamaRequest(model, prompt, [base64], Stream: false, Format: Schema, Options: Options);
+        var request = new OllamaRequest(model, prompt, [base64], Stream: false, Format: AnalyzeSchema, Options: Options);
 
         var response = await httpClient.PostAsJsonAsync("api/generate", request);
         response.EnsureSuccessStatusCode();
@@ -41,5 +51,23 @@ public class OllamaService(HttpClient httpClient, string model, string prompt)
             throw new InvalidOperationException($"Could not deserialize structured response: {result.Response}");
 
         return (analysis.Description, analysis.Tags ?? []);
+    }
+
+    public async Task<string[]> SelectTagsAsync(byte[] imageBytes, string[] tagNames)
+    {
+        var tagList = string.Join("\n", tagNames.Select(t => $"- {t}"));
+        var fullPrompt = $"{prompt}\n\nBeschikbare tags:\n{tagList}";
+        var base64 = Convert.ToBase64String(imageBytes);
+        var request = new OllamaRequest(model, fullPrompt, [base64], Stream: false, Format: SelectSchema, Options: Options);
+
+        var response = await httpClient.PostAsJsonAsync("api/generate", request);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<OllamaResponse>(JsonOptions);
+        if (result is null)
+            throw new InvalidOperationException("Empty response from Ollama.");
+
+        var analysis = JsonSerializer.Deserialize<OllamaImageAnalysis>(result.Response, JsonOptions);
+        return analysis?.Tags ?? [];
     }
 }
