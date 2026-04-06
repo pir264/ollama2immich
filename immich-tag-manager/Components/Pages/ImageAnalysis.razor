@@ -1,0 +1,403 @@
+@page "/analyseer-fotos"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IImmichAssetService AssetService
+@inject IOllamaImageService OllamaImageService
+@inject IImmichTagService TagService
+@inject IConfiguration Configuration
+
+@using System.Collections.Concurrent
+@using System.Threading
+
+<h1>Foto-analyse</h1>
+
+@if (_state == PageState.Idle)
+{
+    <p>Verwerk alle foto's in Immich met Ollama.</p>
+
+    <div style="display:flex; flex-direction:column; gap:0.75rem; max-width:360px; margin-bottom:1.25rem;">
+        <div style="display:flex; gap:1rem;">
+            <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;">
+                <input type="radio" name="mode" checked="@(!_tagExistingMode)"
+                       @onchange="() => _tagExistingMode = false" />
+                Normaal
+            </label>
+            <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;" title="Wijs alleen bestaande tags toe, geen nieuwe tags of beschrijvingen">
+                <input type="radio" name="mode" checked="@_tagExistingMode"
+                       @onchange="() => _tagExistingMode = true" />
+                Bestaande tags
+            </label>
+        </div>
+        @if (_tagExistingMode)
+        {
+            <p style="font-size:0.85em;color:#555;margin:0;">
+                Ollama selecteert per foto welke bestaande Immich-tags van toepassing zijn.
+                Geen nieuwe tags of beschrijvingen.
+            </p>
+        }
+        else
+        {
+            <p style="font-size:0.85em;color:#555;margin:0;">
+                Ollama genereert per foto een beschrijving en nieuwe tags.
+                Foto's met bestaande beschrijving worden overgeslagen.
+            </p>
+        }
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <label for="feedSize">Zichtbare foto's:</label>
+            <input type="number" id="feedSize" @bind="_feedSize" min="1" max="50" style="width:5rem;" />
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <label for="concurrent">Gelijktijdig:</label>
+            <input type="number" id="concurrent" @bind="_concurrentAssets" min="1" max="10" style="width:5rem;" />
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <label for="pageSize">Paginagrootte:</label>
+            <input type="number" id="pageSize" @bind="_pageSize" min="10" max="200" style="width:5rem;" />
+        </div>
+    </div>
+    <button class="btn btn-primary" @onclick="StartAsync">Start</button>
+}
+else
+{
+    <div class="counter-bar">
+        Modus: <strong>@(_tagExistingMode ? "Bestaande tags" : "Normaal")</strong>
+        &nbsp;|&nbsp;
+        Verwerkt: <strong>@_processed</strong> &nbsp;|&nbsp;
+        Overgeslagen: <strong>@_skipped</strong> &nbsp;|&nbsp;
+        Mislukt: <strong>@_failed</strong>
+        @if (_state == PageState.Running)
+        {
+            <span style="margin-left:1rem;"><span class="spinner"></span></span>
+        }
+    </div>
+
+    @if (_state == PageState.Running)
+    {
+        <button class="btn btn-primary" @onclick="StopAsync" style="margin-bottom:1rem;">Stop</button>
+    }
+    else
+    {
+        <p>
+            @if (_state == PageState.Done)
+            {
+                <em>Alle foto's verwerkt.</em>
+            }
+            else
+            {
+                <em>Gestopt door gebruiker.</em>
+            }
+        </p>
+        <button class="btn btn-primary" @onclick="Reset">Opnieuw starten</button>
+    }
+
+    <div class="photo-grid">
+        @for (int i = _feed.Count - 1; i >= 0; i--)
+        {
+            var item = _feed[i];
+            <div class="photo-card">
+                <div style="flex-shrink:0;">
+                    @if (item.ThumbnailBytes is { Length: > 0 })
+                    {
+                        <img src="@item.ThumbnailDataUrl" alt="thumbnail" />
+                    }
+                    else
+                    {
+                        <div style="width:120px;height:90px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;">
+                            <span class="spinner"></span>
+                        </div>
+                    }
+                </div>
+                <div class="photo-info">
+                    <div style="margin-bottom:0.4rem;">
+                        <span class="@StatusBadgeClass(item.Status)">@StatusLabel(item.Status)</span>
+                        <span style="font-size:0.75em;color:#999;margin-left:0.5rem;">@item.AssetId[..8]…</span>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(item.Description))
+                    {
+                        <div style="font-size:0.9em;margin-bottom:0.4rem;">@item.Description</div>
+                    }
+                    @if (item.Tags.Length > 0)
+                    {
+                        <div style="margin-bottom:0.4rem;">
+                            @foreach (var tag in item.Tags)
+                            {
+                                <span class="tag-chip">@tag</span>
+                            }
+                        </div>
+                    }
+                    <div class="save-indicator">
+                        @if (item.DescriptionSaved)
+                        {
+                            <span style="color:#155724;">✓ Beschrijving opgeslagen</span>
+                        }
+                        @if (item.TagsSaved)
+                        {
+                            <span style="color:#155724; margin-left:0.5rem;">✓ Tags opgeslagen</span>
+                        }
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(item.ErrorMessage))
+                    {
+                        <div style="color:#721c24;font-size:0.85em;margin-top:0.25rem;">✗ @item.ErrorMessage</div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private enum PageState { Idle, Running, Stopped, Done }
+
+    private PageState _state = PageState.Idle;
+    private bool _tagExistingMode;
+
+    private int _feedSize;
+    private int _concurrentAssets;
+    private int _pageSize;
+
+    private readonly List<AssetProcessingItem> _feed = [];
+    private int _processed;
+    private int _skipped;
+    private int _failed;
+
+    private CancellationTokenSource? _cts;
+    private ConcurrentDictionary<string, string> _tagCache = new();
+    private readonly object _tagCreateLock = new();
+
+    protected override void OnInitialized()
+    {
+        _feedSize = int.TryParse(Configuration["ImageAnalysis:FeedSize"], out var f) ? f : 10;
+        _concurrentAssets = int.TryParse(Configuration["ImageAnalysis:ConcurrentAssets"], out var c) ? c : 2;
+        _pageSize = int.TryParse(Configuration["ImageAnalysis:PageSize"], out var p) ? p : 50;
+    }
+
+    private async Task StartAsync()
+    {
+        _feed.Clear();
+        _processed = 0;
+        _skipped = 0;
+        _failed = 0;
+        _tagCache = new ConcurrentDictionary<string, string>();
+        _cts = new CancellationTokenSource();
+        _state = PageState.Running;
+        _ = Task.Run(RunPipelineAsync);
+        await Task.CompletedTask;
+    }
+
+    private void StopAsync()
+    {
+        _cts?.Cancel();
+    }
+
+    private void Reset()
+    {
+        _state = PageState.Idle;
+        _feed.Clear();
+        _processed = 0;
+        _skipped = 0;
+        _failed = 0;
+    }
+
+    private async Task RunPipelineAsync()
+    {
+        try
+        {
+            var tags = await TagService.GetTagsAsync();
+            foreach (var tag in tags)
+                _tagCache.TryAdd(tag.Name.ToLowerInvariant(), tag.Id);
+
+            if (_tagExistingMode && _tagCache.IsEmpty)
+            {
+                await InvokeAsync(() =>
+                {
+                    _state = PageState.Done;
+                    StateHasChanged();
+                });
+                return;
+            }
+
+            var semaphore = new SemaphoreSlim(_concurrentAssets);
+            var tasks = new List<Task>();
+
+            await foreach (var asset in AssetService.GetAllAssetsAsync(_pageSize, _cts!.Token))
+            {
+                if (_cts.Token.IsCancellationRequested)
+                    break;
+
+                if (!string.Equals(asset.Type, "IMAGE", StringComparison.OrdinalIgnoreCase))
+                {
+                    Interlocked.Increment(ref _skipped);
+                    await InvokeAsync(StateHasChanged);
+                    continue;
+                }
+
+                // In normal mode: skip assets that already have a description
+                if (!_tagExistingMode && !string.IsNullOrWhiteSpace(asset.ExifInfo?.Description))
+                {
+                    Interlocked.Increment(ref _skipped);
+                    await InvokeAsync(StateHasChanged);
+                    continue;
+                }
+
+                var item = new AssetProcessingItem { AssetId = asset.Id };
+                AddToFeed(item);
+                await InvokeAsync(StateHasChanged);
+
+                await semaphore.WaitAsync(_cts.Token);
+                var capturedItem = item;
+                tasks.Add(Task.Run(() => ProcessAssetAsync(capturedItem, semaphore)));
+            }
+
+            await Task.WhenAll(tasks);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+        finally
+        {
+            var finalState = _cts?.Token.IsCancellationRequested == true ? PageState.Stopped : PageState.Done;
+            await InvokeAsync(() =>
+            {
+                _state = finalState;
+                StateHasChanged();
+            });
+        }
+    }
+
+    private void AddToFeed(AssetProcessingItem item)
+    {
+        _feed.Add(item);
+        if (_feed.Count > _feedSize)
+            _feed.RemoveAt(0);
+    }
+
+    private async Task ProcessAssetAsync(AssetProcessingItem item, SemaphoreSlim semaphore)
+    {
+        try
+        {
+            item.Status = AssetItemStatus.FetchingThumbnail;
+            await InvokeAsync(StateHasChanged);
+
+            item.ThumbnailBytes = await AssetService.GetThumbnailAsync(item.AssetId);
+
+            item.Status = AssetItemStatus.Analyzing;
+            await InvokeAsync(StateHasChanged);
+
+            if (_tagExistingMode)
+            {
+                await ProcessTagExistingAsync(item);
+            }
+            else
+            {
+                await ProcessNormalAsync(item);
+            }
+
+            item.TagsSaved = true;
+            item.Status = AssetItemStatus.Done;
+            Interlocked.Increment(ref _processed);
+        }
+        catch (OperationCanceledException)
+        {
+            item.Status = AssetItemStatus.Skipped;
+        }
+        catch (Exception ex)
+        {
+            item.ErrorMessage = ex.Message;
+            item.Status = AssetItemStatus.Failed;
+            Interlocked.Increment(ref _failed);
+        }
+        finally
+        {
+            semaphore.Release();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ProcessNormalAsync(AssetProcessingItem item)
+    {
+        var (desc, tags) = await OllamaImageService.AnalyzeImageAsync(item.ThumbnailBytes!);
+        item.Description = desc;
+        item.Tags = tags;
+
+        item.Status = AssetItemStatus.Saving;
+        await InvokeAsync(StateHasChanged);
+
+        await AssetService.UpdateDescriptionAsync(item.AssetId, desc);
+        item.DescriptionSaved = true;
+
+        foreach (var tag in tags)
+        {
+            var key = tag.ToLowerInvariant();
+            string tagId;
+
+            if (!_tagCache.TryGetValue(key, out tagId!))
+            {
+                lock (_tagCreateLock)
+                {
+                    if (!_tagCache.TryGetValue(key, out tagId!))
+                    {
+                        var created = TagService.CreateTagAsync(tag).GetAwaiter().GetResult();
+                        _tagCache[key] = created.Id;
+                        tagId = created.Id;
+                    }
+                }
+            }
+
+            await TagService.AssignTagToAssetsAsync(tagId, [item.AssetId]);
+        }
+    }
+
+    private async Task ProcessTagExistingAsync(AssetProcessingItem item)
+    {
+        var tagNames = _tagCache.Keys.ToArray();
+        var matchedTags = await OllamaImageService.SelectTagsAsync(item.ThumbnailBytes!, tagNames);
+
+        // Filter to only tags we actually have in the cache (Ollama may hallucinate)
+        var validTags = matchedTags
+            .Where(t => _tagCache.ContainsKey(t.ToLowerInvariant()))
+            .ToArray();
+
+        item.Tags = validTags;
+
+        item.Status = AssetItemStatus.Saving;
+        await InvokeAsync(StateHasChanged);
+
+        foreach (var tag in validTags)
+        {
+            var tagId = _tagCache[tag.ToLowerInvariant()];
+            await TagService.AssignTagToAssetsAsync(tagId, [item.AssetId]);
+        }
+    }
+
+    private static string StatusBadgeClass(AssetItemStatus status) => status switch
+    {
+        AssetItemStatus.Queued => "badge-queued",
+        AssetItemStatus.FetchingThumbnail => "badge-analyzing",
+        AssetItemStatus.Analyzing => "badge-analyzing",
+        AssetItemStatus.Saving => "badge-saving",
+        AssetItemStatus.Done => "badge-done",
+        AssetItemStatus.Skipped => "badge-skipped",
+        AssetItemStatus.Failed => "badge-failed",
+        _ => "badge-queued"
+    };
+
+    private static string StatusLabel(AssetItemStatus status) => status switch
+    {
+        AssetItemStatus.Queued => "Wachten",
+        AssetItemStatus.FetchingThumbnail => "Thumbnail ophalen",
+        AssetItemStatus.Analyzing => "Analyseren",
+        AssetItemStatus.Saving => "Opslaan",
+        AssetItemStatus.Done => "Klaar",
+        AssetItemStatus.Skipped => "Overgeslagen",
+        AssetItemStatus.Failed => "Fout",
+        _ => "Onbekend"
+    };
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

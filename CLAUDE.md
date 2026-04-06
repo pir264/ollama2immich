@@ -17,13 +17,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - When integrating with LLM APIs (e.g., Ollama), always use structured/JSON output mode rather than parsing free-text.
 - Ensure prompts explicitly instruct the model to respond in English to avoid localization issues.
 
-## What this project does
+## Solution overview
 
-`ollama2immich` is a .NET 10 console application that iterates over all image assets in an [Immich](https://immich.app/) photo library, sends each thumbnail to a local [Ollama](https://ollama.ai/) vision model (default: `llava`), and writes the generated description and keyword tags back to Immich.
+The solution contains four projects:
+
+| Project | Type | Purpose |
+|---|---|---|
+| `ollama2immich` | Console (.NET 10) | Processes photos via Ollama, writes descriptions and tags to Immich |
+| `immich-tag-manager` | Blazor Server (.NET 10) | Interactive web UI for tag management and photo analysis |
+| `immich-tag-manager.Tests` | xUnit (.NET 10) | Unit tests for the Blazor app |
+| `immich-seeder` | Console (.NET 10) | Seeds Immich with test photos from Wikimedia |
 
 ## Commands
 
-All commands run from the `ollama2immich/` project directory (where the `.csproj` lives).
+Run from the relevant project directory (where the `.csproj` lives).
 
 ```bash
 # Build
@@ -34,13 +41,12 @@ dotnet run
 
 # Publish a self-contained binary
 dotnet publish -c Release
+
+# Run tests (from immich-tag-manager.Tests/)
+dotnet test
 ```
 
-There are no tests in this project.
-
-## Configuration
-
-Copy `appsettings.json` and set the required fields before running:
+## ollama2immich — Configuration
 
 ```json
 {
@@ -50,7 +56,9 @@ Copy `appsettings.json` and set the required fields before running:
   },
   "Ollama": {
     "BaseUrl": "http://localhost:11434",
-    "Model": "llava"
+    "Model": "llava",
+    "Prompt": "...",
+    "TagExistingPrompt": "..."
   },
   "Processing": {
     "ConcurrentAssets": 2,
@@ -59,23 +67,89 @@ Copy `appsettings.json` and set the required fields before running:
 }
 ```
 
-`Immich:ApiKey` is the only required field — the app exits immediately if it is empty. Settings can also be overridden via environment variables (e.g. `Immich__ApiKey=...`).
+`Immich:ApiKey` is the only required field. Settings can be overridden via environment variables (e.g. `Immich__ApiKey=...`).
 
-## Architecture
+## ollama2immich — Architecture
 
-The entry point (`Program.cs`) wires up a generic host with two typed HTTP clients and drives the main processing loop directly (no hosted service or worker class). The flow is:
+`Program.cs` wires up a generic host and drives the processing loop directly. Three modes:
 
-1. **Fetch all Immich tags** once at startup and cache them in a `Dictionary<string, string>` (name → id) to avoid redundant API calls.
-2. **Page through assets** via `ImmichService.GetAllAssetsAsync` (async stream). Skip non-`IMAGE` types and assets that already have a description.
-3. **Concurrently process** images via a `SemaphoreSlim` (controlled by `Processing:ConcurrentAssets`). For each asset:
-   - Download the preview thumbnail (`ImmichService.GetThumbnailAsync`).
-   - Send it base64-encoded to Ollama (`OllamaService.AnalyzeImageAsync`).
-   - Write the description back to Immich (`ImmichService.UpdateDescriptionAsync`).
-   - Create any new tags and assign them to the asset.
+- **Normal** (`dotnet run`) — generates descriptions and new tags per photo via `OllamaService.AnalyzeImageAsync`. Skips photos that already have a description.
+- **Tag-existing** (`dotnet run -- --tag-existing`) — uses `OllamaService.SelectTagsAsync` to match photos against existing tags only. No new tags or descriptions are written.
+- **Reset** (`dotnet run -- --reset`) — clears all descriptions and deletes all tags.
 
-### Key design details
+Flow (normal mode):
+1. Fetch all Immich tags once and cache in `Dictionary<string, string>` (name → id).
+2. Page through assets via `ImmichService.GetAllAssetsAsync` (async stream).
+3. Concurrently process images via `SemaphoreSlim` (controlled by `Processing:ConcurrentAssets`).
 
-- **Ollama prompt** is a fixed constant in `OllamaService` that instructs the model to respond in a structured `DESCRIPTION: ... / TAGS: ...` format. `ParseResponse` enforces this format and throws `FormatException` if `DESCRIPTION:` is missing.
-- **Tag deduplication** happens in-memory using the pre-fetched `existingTags` dictionary. The dictionary is mutated from concurrent tasks without a lock — this is a potential race condition if two tasks create the same new tag simultaneously.
-- **HTTP timeouts**: Immich client = 30 s; Ollama client = 5 min (vision inference is slow).
-- The Ollama `HttpClient` is created manually (not via `AddHttpClient`) because `OllamaService` takes the model name as a constructor parameter alongside the client.
+Key details:
+- **Structured output**: Ollama is called with a JSON schema (`format` field); responses are deserialized directly — no text parsing.
+- **HTTP timeouts**: Immich client = 30 s; Ollama client = 5 min.
+- The Ollama `HttpClient` is created manually (not via `AddHttpClient`) because `OllamaService` takes the model name and prompt as constructor parameters.
+
+## immich-tag-manager — Architecture
+
+Blazor Server app. Services registered in `Program.cs`:
+
+| Interface | Purpose | Registration |
+|---|---|---|
+| `IImmichTagService` | Tag CRUD (GetTags, CreateTag, UpdateTag, DeleteTag, AssignTagToAssets) | `AddHttpClient<>`, 30 s timeout |
+| `IImmichAssetService` | Asset pipeline (GetAllAssets, GetThumbnail, UpdateDescription) | `AddHttpClient<>`, 60 s timeout |
+| `IOllamaTagService` | Text-based tag analysis (rename/merge/hierarchy proposals) | Manual singleton, 10 min timeout |
+| `IOllamaTagGeneratorService` | Generate a tag hierarchy from scratch | Manual singleton, 10 min timeout |
+| `IOllamaImageService` | Image analysis: `AnalyzeImageAsync` + `SelectTagsAsync` | Manual singleton, 5 min timeout |
+
+Pages:
+- `/` — analyse and reorganise existing Immich tags
+- `/genereer-tags` — generate a tag hierarchy with Ollama
+- `/analyseer-fotos` — process photos: normal mode (descriptions + new tags) or tag-existing mode (match existing tags only)
+
+### Configuration (`immich-tag-manager/appsettings.json`)
+
+```json
+{
+  "Immich": { "BaseUrl", "ApiKey" },
+  "Ollama": {
+    "BaseUrl", "Model",
+    "TagPrompt", "TagGeneratorPrompt", "MaxGeneratedTags", "TagGeneratorDepth",
+    "ImageModel", "ImagePrompt", "TagExistingPrompt"
+  },
+  "ImageAnalysis": { "FeedSize", "ConcurrentAssets", "PageSize" }
+}
+```
+
+### UI patterns
+
+- State enum per page (Idle → Loading/Running → Review/Stopped → Done)
+- `InvokeAsync(StateHasChanged)` for UI updates from background tasks
+- All UI text is Dutch
+- CSS is defined inline in `App.razor` — no scoped CSS files
+- Config defaults read via `IConfiguration` in `OnInitialized()`
+
+### Photo analysis page (`/analyseer-fotos`)
+
+- Two modes selectable via radio buttons: **Normaal** and **Bestaande tags**
+- Rolling feed of last N photos (newest first), each showing thumbnail, status badge, description, tag chips, save indicators and error
+- `AssetProcessingItem` class holds per-photo mutable state
+- `ConcurrentDictionary<string, string>` + `lock` block for tag-cache race conditions
+- `IDisposable` on the component cancels processing on navigation
+
+## Testing
+
+Tests live in `immich-tag-manager.Tests/`. Patterns:
+- **xUnit** with `[Fact]`
+- **`TestHttpMessageHandler`** (custom) for HTTP mocking — not Moq or NSubstitute
+- **`NullLogger<T>.Instance`** for logger dependencies
+- **No FluentAssertions** — use `Assert.*` from xUnit only
+
+Standard factory pattern:
+```csharp
+private static XxxService CreateService(Func<HttpRequestMessage, HttpResponseMessage> handler)
+{
+    var client = new HttpClient(new TestHttpMessageHandler(handler))
+    {
+        BaseAddress = new Uri("http://test/")
+    };
+    return new XxxService(client, NullLogger<XxxService>.Instance);
+}
+```

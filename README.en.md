@@ -9,7 +9,7 @@ A collection of .NET 10 tools to automatically enrich and organise an [Immich](h
 | Project | Type | Purpose |
 |---|---|---|
 | [`ollama2immich`](#ollama2immich-1) | Console | Generates descriptions and tags for each photo using a vision model |
-| [`immich-tag-manager`](#immich-tag-manager-1) | Blazor Server (web) | Organises tags: renames, merges and hierarchy via a web UI |
+| [`immich-tag-manager`](#immich-tag-manager-1) | Blazor Server (web) | Organises tags and analyses photos via a web UI |
 | [`immich-seeder`](#immich-seeder-1) | Console | Populates Immich with test photos from Wikimedia |
 
 All tools run fully locally — no data is sent to external services.
@@ -69,9 +69,9 @@ All available settings:
   },
   "Ollama": {
     "BaseUrl": "http://localhost:11434",
-    "Model": "gemma4",
+    "Model": "llava",
     "Prompt": "Examine this photo carefully. ...",
-    "TagExistingPrompt": "Examine this photo carefully. ..."
+    "TagExistingPrompt": "Examine this photo carefully. Below is a list of existing tags. ..."
   },
   "Processing": {
     "ConcurrentAssets": 2,
@@ -109,7 +109,7 @@ dotnet run -- --reset
 
 ## immich-tag-manager
 
-A Blazor Server web application that cleans up the tag collection in Immich. After automatic tagging with `ollama2immich` a large flat list of tags emerges — with duplicates, plural forms and mixed languages. This tool organises that in two ways, accessible via the navigation bar.
+A Blazor Server web application for organising tags and analysing photos. Accessible via the navigation bar in the browser.
 
 ### Manage tags (`/`)
 
@@ -123,11 +123,28 @@ A Blazor Server web application that cleans up the tag collection in Immich. Aft
 
 ### Generate hierarchy (`/genereer-tags`)
 
-Let Ollama — without analysing any photos — reason about which tags are useful for a photo library and generate a broadly applicable tag hierarchy. Configurable: maximum number of tags (default 100) and hierarchy depth (default 3). All tags are singular and lowercase. Example paths: `location → country → italy`, `nature → colour → red`.
+Let Ollama generate a broadly applicable tag hierarchy for a photo library — without analysing any photos. Configurable: maximum number of tags (default 100) and hierarchy depth (default 3). All tags are singular and lowercase. Example paths: `location → country → italy`, `nature → colour → red`.
 
 1. **Generate** — Ollama reasons over categories such as location, nature, people, buildings, food, transport, seasons, colours and activities.
 2. **Review** — each tag path appears as a checkbox; select what is relevant.
-3. **Apply** — selected paths are saved as nested tags in Immich (with parent-child relations). Existing tags are reused.
+3. **Apply** — selected paths are saved as nested tags in Immich. Existing tags are reused.
+
+### Photo analysis (`/analyseer-fotos`)
+
+Runs the image processing pipeline from `ollama2immich` directly in the browser, with a live feed of the last N photos being processed.
+
+Two modes (selectable via radio buttons):
+
+**Normal** — Ollama generates a description and new tags per photo. Photos that already have a description are skipped.
+
+**Tag-existing** — Ollama selects which existing Immich tags apply to each photo. No new tags or descriptions are written. Useful when the tag hierarchy has already been built.
+
+Each photo card in the feed shows:
+- Thumbnail
+- Status (Queued / Fetching thumbnail / Analysing / Saving / Done / Error)
+- Generated description and tags
+- Confirmation once description and/or tags have been saved to Immich
+- Error message if something goes wrong (other photos continue processing)
 
 ### Configuration
 
@@ -155,7 +172,15 @@ All available settings:
     "TagPrompt": "You receive a list of Immich photo tags. ...",
     "MaxGeneratedTags": 100,
     "TagGeneratorDepth": 3,
-    "TagGeneratorPrompt": "You are an expert in organising photo libraries. ..."
+    "TagGeneratorPrompt": "You are an expert in organising photo libraries. ...",
+    "ImageModel": "llava",
+    "ImagePrompt": "Look at this photo carefully. ...",
+    "TagExistingPrompt": "Look at this photo carefully. Below is a list of existing tags. ..."
+  },
+  "ImageAnalysis": {
+    "FeedSize": 10,
+    "ConcurrentAssets": 2,
+    "PageSize": 50
   }
 }
 ```
@@ -175,7 +200,7 @@ cd immich-tag-manager.Tests
 dotnet test
 ```
 
-The test project uses xUnit and NSubstitute and covers JSON parsing of Ollama responses and HTTP communication with Immich.
+The test project uses xUnit and covers JSON parsing of Ollama responses and HTTP communication with Immich via a custom `TestHttpMessageHandler`.
 
 ---
 
@@ -223,9 +248,10 @@ dotnet run
 ## Recommended workflow
 
 ```
-immich-seeder                →  load test photos into Immich
-ollama2immich                →  generate descriptions and tags per photo
-immich-tag-manager           →  organise tags into a hierarchy
-ollama2immich --tag-existing →  link hierarchy tags to all photos
-ollama2immich --reset        →  clear everything and start over
+immich-seeder                      →  load test photos into Immich
+immich-tag-manager /genereer-tags  →  build a tag hierarchy
+immich-tag-manager /analyseer-fotos →  process photos via the browser
+  or: ollama2immich                →  process photos via the console
+immich-tag-manager /               →  clean up and organise tags
+ollama2immich --reset              →  clear everything and start over
 ```
