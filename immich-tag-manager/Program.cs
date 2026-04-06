@@ -2,6 +2,8 @@ using ImmichTagManager.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true);
+
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 
 var cfg = builder.Configuration;
