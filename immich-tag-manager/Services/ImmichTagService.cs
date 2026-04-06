@@ -1,17 +1,27 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using ImmichTagManager.Models;
+using Microsoft.Extensions.Logging;
 
 namespace ImmichTagManager.Services;
 
-public class ImmichTagService(HttpClient httpClient) : IImmichTagService
+public class ImmichTagService(HttpClient httpClient, ILogger<ImmichTagService> logger) : IImmichTagService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    private async Task EnsureSuccessAsync(HttpResponseMessage response, string operation)
+    {
+        if (response.IsSuccessStatusCode) return;
+        var body = await response.Content.ReadAsStringAsync();
+        logger.LogError("Immich {Operation} failed: {StatusCode} {ReasonPhrase} — {Body}",
+            operation, (int)response.StatusCode, response.ReasonPhrase, body);
+        response.EnsureSuccessStatusCode();
+    }
 
     public async Task<List<ImmichTag>> GetTagsAsync()
     {
         var response = await httpClient.GetAsync("api/tags");
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessAsync(response, "GET api/tags");
         return await response.Content.ReadFromJsonAsync<List<ImmichTag>>(JsonOptions) ?? [];
     }
 
@@ -21,7 +31,7 @@ public class ImmichTagService(HttpClient httpClient) : IImmichTagService
             ? JsonContent.Create(new { name, parentId })
             : JsonContent.Create(new { name });
         var response = await httpClient.PostAsync("api/tags", body);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessAsync(response, $"POST api/tags ({name})");
         return (await response.Content.ReadFromJsonAsync<ImmichTag>(JsonOptions))!;
     }
 
@@ -32,14 +42,14 @@ public class ImmichTagService(HttpClient httpClient) : IImmichTagService
         if (parentId is not null) payload["parentId"] = parentId;
 
         var body = JsonContent.Create(payload);
-        var response = await httpClient.PutAsync($"api/tags/{tagId}", body);
-        response.EnsureSuccessStatusCode();
+        var response = await httpClient.PatchAsync($"api/tags/{tagId}", body);
+        await EnsureSuccessAsync(response, $"PATCH api/tags/{tagId} (name={name}, parentId={parentId})");
     }
 
     public async Task DeleteTagAsync(string tagId)
     {
         var response = await httpClient.DeleteAsync($"api/tags/{tagId}");
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessAsync(response, $"DELETE api/tags/{tagId}");
     }
 
     public async Task<List<string>> GetAssetIdsByTagAsync(string tagId)
@@ -50,7 +60,7 @@ public class ImmichTagService(HttpClient httpClient) : IImmichTagService
         {
             var body = JsonContent.Create(new { page, size = 100, tagIds = new[] { tagId } });
             var response = await httpClient.PostAsync("api/search/metadata", body);
-            response.EnsureSuccessStatusCode();
+            await EnsureSuccessAsync(response, $"POST api/search/metadata (tagId={tagId}, page={page})");
 
             var result = await response.Content.ReadFromJsonAsync<ImmichSearchResponse>(JsonOptions);
             var items = result?.Assets.Items;
@@ -71,6 +81,6 @@ public class ImmichTagService(HttpClient httpClient) : IImmichTagService
     {
         var body = JsonContent.Create(new { ids = assetIds });
         var response = await httpClient.PutAsync($"api/tags/{tagId}/assets", body);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessAsync(response, $"PUT api/tags/{tagId}/assets ({assetIds.Count} assets)");
     }
 }

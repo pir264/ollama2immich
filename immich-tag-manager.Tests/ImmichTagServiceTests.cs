@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using ImmichTagManager.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ImmichTagManager.Tests;
@@ -13,7 +14,7 @@ public class ImmichTagServiceTests
         {
             BaseAddress = new Uri("http://test/")
         };
-        return new ImmichTagService(client);
+        return new ImmichTagService(client, NullLogger<ImmichTagService>.Instance);
     }
 
     private static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK)

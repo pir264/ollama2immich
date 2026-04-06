@@ -1,10 +1,11 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using ImmichTagManager.Models;
+using Microsoft.Extensions.Logging;
 
 namespace ImmichTagManager.Services;
 
-public class OllamaTagService(HttpClient httpClient, string model, string prompt) : IOllamaTagService
+public class OllamaTagService(HttpClient httpClient, string model, string prompt, ILogger<OllamaTagService> logger) : IOllamaTagService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -67,7 +68,13 @@ public class OllamaTagService(HttpClient httpClient, string model, string prompt
 
         var request = new OllamaTextRequest(model, fullPrompt, false, Schema, new { temperature = 0 });
         var response = await httpClient.PostAsJsonAsync("api/generate", request);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync();
+            logger.LogError("Ollama api/generate failed: {StatusCode} {ReasonPhrase} — {Body}",
+                (int)response.StatusCode, response.ReasonPhrase, body);
+            response.EnsureSuccessStatusCode();
+        }
 
         var ollamaResponse = await response.Content.ReadFromJsonAsync<OllamaTextResponse>(JsonOptions)
             ?? throw new InvalidOperationException("Lege response van Ollama.");

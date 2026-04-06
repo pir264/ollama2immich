@@ -13,17 +13,6 @@ var ollamaBase  = cfg["Ollama:BaseUrl"]?.TrimEnd('/') + "/";
 var ollamaModel = cfg["Ollama:Model"] ?? "gemma4";
 var ollamaPrompt = cfg["Ollama:TagPrompt"] ?? string.Empty;
 
-if (string.IsNullOrWhiteSpace(immichKey))
-{
-    Console.Error.WriteLine("ERROR: Immich:ApiKey is niet ingesteld.");
-    Environment.Exit(1);
-}
-if (string.IsNullOrWhiteSpace(ollamaPrompt))
-{
-    Console.Error.WriteLine("ERROR: Ollama:TagPrompt is niet ingesteld.");
-    Environment.Exit(1);
-}
-
 builder.Services.AddHttpClient<IImmichTagService, ImmichTagService>(client =>
 {
     client.BaseAddress = new Uri(immichBase!);
@@ -31,17 +20,29 @@ builder.Services.AddHttpClient<IImmichTagService, ImmichTagService>(client =>
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 
-builder.Services.AddSingleton<IOllamaTagService>(_ =>
+builder.Services.AddSingleton<IOllamaTagService>(sp =>
 {
     var http = new HttpClient
     {
         BaseAddress = new Uri(ollamaBase!),
         Timeout = TimeSpan.FromMinutes(10)
     };
-    return new OllamaTagService(http, ollamaModel, ollamaPrompt);
+    var logger = sp.GetRequiredService<ILogger<OllamaTagService>>();
+    return new OllamaTagService(http, ollamaModel, ollamaPrompt, logger);
 });
 
 var app = builder.Build();
+
+if (string.IsNullOrWhiteSpace(immichKey))
+{
+    app.Logger.LogCritical("Immich:ApiKey is niet ingesteld.");
+    Environment.Exit(1);
+}
+if (string.IsNullOrWhiteSpace(ollamaPrompt))
+{
+    app.Logger.LogCritical("Ollama:TagPrompt is niet ingesteld.");
+    Environment.Exit(1);
+}
 
 if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Error");

@@ -169,6 +169,7 @@ else if (_state == AppState.Done)
             StateHasChanged();
 
             _analysis = await OllamaService.AnalyzeTagsAsync(_allTags);
+            _analysis = TagAnalysisFilter.Filter(_analysis, _allTags);
 
             _renameSelected = new bool[_analysis.Renames.Count];
             Array.Fill(_renameSelected, true);
@@ -201,24 +202,30 @@ else if (_state == AppState.Done)
             {
                 if (!_renameSelected[i]) continue;
                 var rename = _analysis.Renames[i];
-
-                var fromTag = tagsByName.GetValueOrDefault(rename.From.ToLowerInvariant());
-                if (fromTag is null) { Log($"⚠ Overgeslagen: '{rename.From}' niet gevonden"); continue; }
-
-                var toKey = rename.To.ToLowerInvariant();
-                if (tagsByName.TryGetValue(toKey, out var existingTo))
+                try
                 {
-                    // Doelnaam bestaat al → merge
-                    await MergeTagsAsync(existingTo, fromTag, tagsByName);
-                    Log($"✓ Hernoemd (als merge): {rename.From} → {rename.To}");
+                    var fromTag = tagsByName.GetValueOrDefault(rename.From.ToLowerInvariant());
+                    if (fromTag is null) { Log($"⚠ Overgeslagen: '{rename.From}' niet gevonden"); continue; }
+
+                    var toKey = rename.To.ToLowerInvariant();
+                    if (tagsByName.TryGetValue(toKey, out var existingTo))
+                    {
+                        // Doelnaam bestaat al → merge
+                        await MergeTagsAsync(existingTo, fromTag, tagsByName);
+                        Log($"✓ Hernoemd (als merge): {rename.From} → {rename.To}");
+                    }
+                    else
+                    {
+                        await ImmichService.UpdateTagAsync(fromTag.Id, name: toKey);
+                        var updated = fromTag with { Name = toKey };
+                        tagsByName.Remove(fromTag.Name.ToLowerInvariant());
+                        tagsByName[toKey] = updated;
+                        Log($"✓ Hernoemd: {rename.From} → {rename.To}");
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    await ImmichService.UpdateTagAsync(fromTag.Id, name: toKey);
-                    var updated = fromTag with { Name = toKey };
-                    tagsByName.Remove(fromTag.Name.ToLowerInvariant());
-                    tagsByName[toKey] = updated;
-                    Log($"✓ Hernoemd: {rename.From} → {rename.To}");
+                    Log($"✗ Fout bij hernoemen '{rename.From}': {ex.Message}");
                 }
             }
 
@@ -237,8 +244,15 @@ else if (_state == AppState.Done)
                     if (discardTag is null) { Log($"⚠ Overgeslagen: '{discardName}' niet gevonden"); continue; }
                     if (discardTag.Id == keepTag.Id) { Log($"⚠ Overgeslagen: '{discardName}' is al '{merge.Keep}'"); continue; }
 
-                    await MergeTagsAsync(keepTag, discardTag, tagsByName);
-                    Log($"✓ Samengevoegd: {discardName} → {merge.Keep}");
+                    try
+                    {
+                        await MergeTagsAsync(keepTag, discardTag, tagsByName);
+                        Log($"✓ Samengevoegd: {discardName} → {merge.Keep}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"✗ Fout bij samenvoegen '{discardName}': {ex.Message}");
+                    }
                 }
             }
 
@@ -252,17 +266,32 @@ else if (_state == AppState.Done)
                 ImmichTag parentTag;
                 if (!tagsByName.TryGetValue(parentKey, out parentTag!))
                 {
-                    parentTag = await ImmichService.CreateTagAsync(parentKey);
-                    tagsByName[parentKey] = parentTag;
-                    Log($"✓ Nieuwe parent aangemaakt: {proposal.Parent}");
+                    try
+                    {
+                        parentTag = await ImmichService.CreateTagAsync(parentKey);
+                        tagsByName[parentKey] = parentTag;
+                        Log($"✓ Nieuwe parent aangemaakt: {proposal.Parent}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"✗ Fout bij aanmaken parent '{proposal.Parent}': {ex.Message}");
+                        continue;
+                    }
                 }
 
                 foreach (var childName in proposal.Children)
                 {
                     var childTag = tagsByName.GetValueOrDefault(childName.ToLowerInvariant());
                     if (childTag is null) { Log($"⚠ Child '{childName}' niet gevonden"); continue; }
-                    await ImmichService.UpdateTagAsync(childTag.Id, parentId: parentTag.Id);
-                    Log($"✓ Hiërarchie: {childName} → {proposal.Parent}");
+                    try
+                    {
+                        await ImmichService.UpdateTagAsync(childTag.Id, parentId: parentTag.Id);
+                        Log($"✓ Hiërarchie: {childName} → {proposal.Parent}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"✗ Fout bij hiërarchie '{childName}': {ex.Message}");
+                    }
                 }
             }
 
