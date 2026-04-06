@@ -1,0 +1,196 @@
+@page "/genereer-tags"
+@rendermode InteractiveServer
+@inject IImmichTagService ImmichService
+@inject IOllamaTagGeneratorService OllamaGeneratorService
+@inject IConfiguration Configuration
+
+<h1>Hiërarchie genereren</h1>
+
+@if (_error is not null)
+{
+    <div class="error">@_error</div>
+    <br />
+    <button class="btn btn-primary" @onclick="Reset">Opnieuw proberen</button>
+}
+else if (_state == AppState.Idle)
+{
+    <p>Laat Ollama een algemeen bruikbare taghiërarchie bedenken voor een fotobibliotheek. De gegenereerde tags kun je daarna selectief opslaan in Immich.</p>
+
+    <div class="config-row">
+        <label for="maxTags">Maximaal aantal tags:</label>
+        <input type="number" id="maxTags" @bind="_maxTags" min="1" max="500" style="width:5rem;" />
+    </div>
+    <div class="config-row">
+        <label for="depth">Hiërarchiediepte:</label>
+        <input type="number" id="depth" @bind="_depth" min="1" max="5" style="width:5rem;" />
+    </div>
+    <br />
+    <button class="btn btn-primary" @onclick="GenerateAsync">Genereer</button>
+}
+else if (_state == AppState.Loading)
+{
+    <span class="spinner"></span> <span>@_statusMessage</span>
+}
+else if (_state == AppState.Review)
+{
+    <p>
+        <strong>@_tagPaths.Count</strong> tags gegenereerd.
+        Vink de gewenste tags aan en klik op <em>Toepassen</em>.
+    </p>
+
+    <h2>
+        Gegenereerde taghiërarchie
+        <span class="select-all" @onclick="SelectAll">alles</span> /
+        <span class="select-all" @onclick="DeselectAll">geen</span>
+    </h2>
+
+    @for (int i = 0; i < _tagPaths.Count; i++)
+    {
+        var idx = i;
+        var path = _tagPaths[i];
+        <div class="proposal">
+            <input type="checkbox" id="t@(idx)" checked="@_selected[idx]"
+                   @onchange="e => _selected[idx] = (bool)e.Value!" />
+            <label for="t@(idx)">@string.Join(" → ", path)</label>
+        </div>
+    }
+
+    <br />
+    <button class="btn btn-primary" @onclick="ApplyAsync">Toepassen op Immich</button>
+}
+else if (_state == AppState.Updating)
+{
+    <h2>Bezig met toepassen...</h2>
+    <div class="log" id="log">
+        @foreach (var line in _log)
+        {
+            <div>@line</div>
+        }
+    </div>
+}
+else if (_state == AppState.Done)
+{
+    <h2>Klaar</h2>
+    <div class="log">
+        @foreach (var line in _log)
+        {
+            <div>@line</div>
+        }
+    </div>
+    <br />
+    <button class="btn btn-primary" @onclick="Reset">Opnieuw genereren</button>
+}
+
+@code {
+    private enum AppState { Idle, Loading, Review, Updating, Done }
+
+    private AppState _state = AppState.Idle;
+    private string _statusMessage = string.Empty;
+    private string? _error;
+
+    private int _maxTags;
+    private int _depth;
+
+    private List<string[]> _tagPaths = [];
+    private bool[] _selected = [];
+    private List<string> _log = [];
+
+    protected override void OnInitialized()
+    {
+        _maxTags = int.TryParse(Configuration["Ollama:MaxGeneratedTags"], out var m) ? m : 100;
+        _depth = int.TryParse(Configuration["Ollama:TagGeneratorDepth"], out var d) ? d : 3;
+    }
+
+    private async Task GenerateAsync()
+    {
+        _error = null;
+        _state = AppState.Loading;
+        _statusMessage = $"Ollama genereert maximaal {_maxTags} tags met diepte {_depth} (dit kan even duren)...";
+
+        try
+        {
+            _tagPaths = await OllamaGeneratorService.GenerateTagHierarchyAsync(_maxTags, _depth);
+
+            _selected = new bool[_tagPaths.Count];
+            Array.Fill(_selected, true);
+
+            _state = AppState.Review;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Fout tijdens genereren: {ex.Message}";
+            _state = AppState.Idle;
+        }
+    }
+
+    private async Task ApplyAsync()
+    {
+        _state = AppState.Updating;
+        _log.Clear();
+
+        try
+        {
+            var existingTags = await ImmichService.GetTagsAsync();
+            // Cache keyed by "{parentId}:{name}" (parentId leeg = root)
+            var tagCache = existingTags.ToDictionary(
+                t => $"{t.ParentId ?? ""}:{t.Name.ToLowerInvariant()}",
+                t => t);
+
+            for (int i = 0; i < _tagPaths.Count; i++)
+            {
+                if (!_selected[i]) continue;
+                var path = _tagPaths[i];
+
+                try
+                {
+                    string? parentId = null;
+                    for (int level = 0; level < path.Length; level++)
+                    {
+                        var name = path[level].ToLowerInvariant();
+                        var cacheKey = $"{parentId ?? ""}:{name}";
+
+                        if (!tagCache.TryGetValue(cacheKey, out var tag))
+                        {
+                            tag = await ImmichService.CreateTagAsync(name, parentId);
+                            tagCache[cacheKey] = tag;
+                        }
+
+                        parentId = tag.Id;
+                    }
+
+                    Log($"✓ {string.Join(" → ", path)}");
+                }
+                catch (Exception ex)
+                {
+                    Log($"✗ Fout bij '{string.Join(" → ", path)}': {ex.Message}");
+                }
+            }
+
+            Log(string.Empty);
+            Log("Klaar.");
+            _state = AppState.Done;
+        }
+        catch (Exception ex)
+        {
+            Log($"✗ Fout: {ex.Message}");
+            _state = AppState.Done;
+        }
+    }
+
+    private void Log(string message)
+    {
+        _log.Add(message);
+        StateHasChanged();
+    }
+
+    private void Reset()
+    {
+        _state = AppState.Idle;
+        _error = null;
+        _tagPaths.Clear();
+        _log.Clear();
+    }
+
+    private void SelectAll() => Array.Fill(_selected, true);
+    private void DeselectAll() => Array.Fill(_selected, false);
+}
