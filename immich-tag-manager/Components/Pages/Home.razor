@@ -1,0 +1,306 @@
+@page "/"
+@rendermode InteractiveServer
+@inject IImmichTagService ImmichService
+@inject IOllamaTagService OllamaService
+
+<h1>Immich Tag Manager</h1>
+
+@if (_error is not null)
+{
+    <div class="error">@_error</div>
+    <br />
+    <button class="btn btn-primary" @onclick="Reset">Opnieuw proberen</button>
+}
+else if (_state == AppState.Idle)
+{
+    <p>Haal alle tags op uit Immich en laat Ollama een hiërarchie en samenvoegvoorstellen maken.</p>
+    <button class="btn btn-primary" @onclick="AnalyzeAsync">Analyseer tags</button>
+}
+else if (_state == AppState.Loading)
+{
+    <span class="spinner"></span> <span>@_statusMessage</span>
+}
+else if (_state == AppState.Review)
+{
+    <p>
+        <strong>@_allTags.Count</strong> tags gevonden.
+        Vink de gewenste wijzigingen aan en klik op <em>Toepassen</em>.
+    </p>
+
+    @if (_analysis!.Renames.Count > 0)
+    {
+        <h2>
+            Hernoemingen (@_analysis.Renames.Count)
+            <span class="select-all" @onclick="() => SelectAll(_renameSelected)">alles</span> /
+            <span class="select-all" @onclick="() => DeselectAll(_renameSelected)">geen</span>
+        </h2>
+        @for (int i = 0; i < _analysis.Renames.Count; i++)
+        {
+            var idx = i;
+            var rename = _analysis.Renames[i];
+            <div class="proposal">
+                <input type="checkbox" id="r@(idx)" checked="@_renameSelected[idx]"
+                       @onchange="e => _renameSelected[idx] = (bool)e.Value!" />
+                <label for="r@(idx)">
+                    <strong>@rename.From</strong> <span class="arrow">→</span> <strong>@rename.To</strong>
+                </label>
+            </div>
+        }
+    }
+    else
+    {
+        <h2>Hernoemingen</h2>
+        <p><em>Geen suggesties.</em></p>
+    }
+
+    @if (_analysis.Merges.Count > 0)
+    {
+        <h2>
+            Samenvoegingen (@_analysis.Merges.Count)
+            <span class="select-all" @onclick="() => SelectAll(_mergeSelected)">alles</span> /
+            <span class="select-all" @onclick="() => DeselectAll(_mergeSelected)">geen</span>
+        </h2>
+        @for (int i = 0; i < _analysis.Merges.Count; i++)
+        {
+            var idx = i;
+            var merge = _analysis.Merges[i];
+            <div class="proposal">
+                <input type="checkbox" id="m@(idx)" checked="@_mergeSelected[idx]"
+                       @onchange="e => _mergeSelected[idx] = (bool)e.Value!" />
+                <label for="m@(idx)">
+                    Bewaren: <strong>@merge.Keep</strong>
+                    <span class="arrow"> | </span>
+                    Verwijderen: <strong>@string.Join(", ", merge.Discard)</strong>
+                </label>
+            </div>
+        }
+    }
+    else
+    {
+        <h2>Samenvoegingen</h2>
+        <p><em>Geen suggesties.</em></p>
+    }
+
+    @if (_analysis.Parents.Count > 0)
+    {
+        <h2>
+            Hiërarchie (@_analysis.Parents.Count)
+            <span class="select-all" @onclick="() => SelectAll(_parentSelected)">alles</span> /
+            <span class="select-all" @onclick="() => DeselectAll(_parentSelected)">geen</span>
+        </h2>
+        @for (int i = 0; i < _analysis.Parents.Count; i++)
+        {
+            var idx = i;
+            var parent = _analysis.Parents[i];
+            <div class="proposal">
+                <input type="checkbox" id="p@(idx)" checked="@_parentSelected[idx]"
+                       @onchange="e => _parentSelected[idx] = (bool)e.Value!" />
+                <label for="p@(idx)">
+                    @if (parent.IsNew)
+                    {
+                        <span class="badge-new">NIEUW</span>
+                    }
+                    else
+                    {
+                        <span class="badge-existing">BESTAAND</span>
+                    }
+                    <strong>@parent.Parent</strong> <span class="arrow">←</span> @string.Join(", ", parent.Children)
+                </label>
+            </div>
+        }
+    }
+    else
+    {
+        <h2>Hiërarchie</h2>
+        <p><em>Geen suggesties.</em></p>
+    }
+
+    <br />
+    <button class="btn btn-primary" @onclick="ApplyAsync">Toepassen op Immich</button>
+}
+else if (_state == AppState.Updating)
+{
+    <h2>Bezig met toepassen...</h2>
+    <div class="log" id="log">
+        @foreach (var line in _log)
+        {
+            <div>@line</div>
+        }
+    </div>
+}
+else if (_state == AppState.Done)
+{
+    <h2>Klaar</h2>
+    <div class="log">
+        @foreach (var line in _log)
+        {
+            <div>@line</div>
+        }
+    </div>
+    <br />
+    <button class="btn btn-primary" @onclick="Reset">Opnieuw analyseren</button>
+}
+
+@code {
+    private enum AppState { Idle, Loading, Review, Updating, Done }
+
+    private AppState _state = AppState.Idle;
+    private string _statusMessage = string.Empty;
+    private string? _error;
+
+    private List<ImmichTag> _allTags = [];
+    private OllamaTagAnalysis? _analysis;
+    private List<string> _log = [];
+
+    private bool[] _renameSelected = [];
+    private bool[] _mergeSelected = [];
+    private bool[] _parentSelected = [];
+
+    private async Task AnalyzeAsync()
+    {
+        _error = null;
+        _state = AppState.Loading;
+        _statusMessage = "Tags ophalen uit Immich...";
+
+        try
+        {
+            _allTags = await ImmichService.GetTagsAsync();
+            _statusMessage = $"{_allTags.Count} tags gevonden. Analyseren met Ollama (dit kan even duren)...";
+            StateHasChanged();
+
+            _analysis = await OllamaService.AnalyzeTagsAsync(_allTags);
+
+            _renameSelected = new bool[_analysis.Renames.Count];
+            Array.Fill(_renameSelected, true);
+            _mergeSelected = new bool[_analysis.Merges.Count];
+            Array.Fill(_mergeSelected, true);
+            _parentSelected = new bool[_analysis.Parents.Count];
+            Array.Fill(_parentSelected, true);
+
+            _state = AppState.Review;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Fout tijdens analyse: {ex.Message}";
+            _state = AppState.Idle;
+        }
+    }
+
+    private async Task ApplyAsync()
+    {
+        _state = AppState.Updating;
+        _log.Clear();
+
+        try
+        {
+            // Bouw een lookup op naam (lowercase) voor snelle opzoeking
+            var tagsByName = _allTags.ToDictionary(t => t.Name.ToLowerInvariant(), t => t);
+
+            // Stap 1: Hernoemingen
+            for (int i = 0; i < _analysis!.Renames.Count; i++)
+            {
+                if (!_renameSelected[i]) continue;
+                var rename = _analysis.Renames[i];
+
+                var fromTag = tagsByName.GetValueOrDefault(rename.From.ToLowerInvariant());
+                if (fromTag is null) { Log($"⚠ Overgeslagen: '{rename.From}' niet gevonden"); continue; }
+
+                var toKey = rename.To.ToLowerInvariant();
+                if (tagsByName.TryGetValue(toKey, out var existingTo))
+                {
+                    // Doelnaam bestaat al → merge
+                    await MergeTagsAsync(existingTo, fromTag, tagsByName);
+                    Log($"✓ Hernoemd (als merge): {rename.From} → {rename.To}");
+                }
+                else
+                {
+                    await ImmichService.UpdateTagAsync(fromTag.Id, name: toKey);
+                    var updated = fromTag with { Name = toKey };
+                    tagsByName.Remove(fromTag.Name.ToLowerInvariant());
+                    tagsByName[toKey] = updated;
+                    Log($"✓ Hernoemd: {rename.From} → {rename.To}");
+                }
+            }
+
+            // Stap 2: Samenvoegingen
+            for (int i = 0; i < _analysis.Merges.Count; i++)
+            {
+                if (!_mergeSelected[i]) continue;
+                var merge = _analysis.Merges[i];
+
+                var keepTag = tagsByName.GetValueOrDefault(merge.Keep.ToLowerInvariant());
+                if (keepTag is null) { Log($"⚠ Overgeslagen: '{merge.Keep}' niet gevonden"); continue; }
+
+                foreach (var discardName in merge.Discard)
+                {
+                    var discardTag = tagsByName.GetValueOrDefault(discardName.ToLowerInvariant());
+                    if (discardTag is null) { Log($"⚠ Overgeslagen: '{discardName}' niet gevonden"); continue; }
+                    if (discardTag.Id == keepTag.Id) { Log($"⚠ Overgeslagen: '{discardName}' is al '{merge.Keep}'"); continue; }
+
+                    await MergeTagsAsync(keepTag, discardTag, tagsByName);
+                    Log($"✓ Samengevoegd: {discardName} → {merge.Keep}");
+                }
+            }
+
+            // Stap 3: Hiërarchie
+            for (int i = 0; i < _analysis.Parents.Count; i++)
+            {
+                if (!_parentSelected[i]) continue;
+                var proposal = _analysis.Parents[i];
+                var parentKey = proposal.Parent.ToLowerInvariant();
+
+                ImmichTag parentTag;
+                if (!tagsByName.TryGetValue(parentKey, out parentTag!))
+                {
+                    parentTag = await ImmichService.CreateTagAsync(parentKey);
+                    tagsByName[parentKey] = parentTag;
+                    Log($"✓ Nieuwe parent aangemaakt: {proposal.Parent}");
+                }
+
+                foreach (var childName in proposal.Children)
+                {
+                    var childTag = tagsByName.GetValueOrDefault(childName.ToLowerInvariant());
+                    if (childTag is null) { Log($"⚠ Child '{childName}' niet gevonden"); continue; }
+                    await ImmichService.UpdateTagAsync(childTag.Id, parentId: parentTag.Id);
+                    Log($"✓ Hiërarchie: {childName} → {proposal.Parent}");
+                }
+            }
+
+            Log(string.Empty);
+            Log("Klaar.");
+            _state = AppState.Done;
+        }
+        catch (Exception ex)
+        {
+            Log($"✗ Fout: {ex.Message}");
+            _state = AppState.Done;
+        }
+    }
+
+    private async Task MergeTagsAsync(ImmichTag keepTag, ImmichTag discardTag, Dictionary<string, ImmichTag> tagsByName)
+    {
+        var assetIds = await ImmichService.GetAssetIdsByTagAsync(discardTag.Id);
+        if (assetIds.Count > 0)
+            await ImmichService.AssignTagToAssetsAsync(keepTag.Id, assetIds);
+        await ImmichService.DeleteTagAsync(discardTag.Id);
+        tagsByName.Remove(discardTag.Name.ToLowerInvariant());
+    }
+
+    private void Log(string message)
+    {
+        _log.Add(message);
+        StateHasChanged();
+    }
+
+    private void Reset()
+    {
+        _state = AppState.Idle;
+        _error = null;
+        _analysis = null;
+        _log.Clear();
+        _allTags.Clear();
+    }
+
+    private static void SelectAll(bool[] arr) => Array.Fill(arr, true);
+    private static void DeselectAll(bool[] arr) => Array.Fill(arr, false);
+}

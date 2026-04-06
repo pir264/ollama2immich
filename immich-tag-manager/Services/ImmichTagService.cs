@@ -1,0 +1,76 @@
+using System.Net.Http.Json;
+using System.Text.Json;
+using ImmichTagManager.Models;
+
+namespace ImmichTagManager.Services;
+
+public class ImmichTagService(HttpClient httpClient) : IImmichTagService
+{
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    public async Task<List<ImmichTag>> GetTagsAsync()
+    {
+        var response = await httpClient.GetAsync("api/tags");
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<List<ImmichTag>>(JsonOptions) ?? [];
+    }
+
+    public async Task<ImmichTag> CreateTagAsync(string name, string? parentId = null)
+    {
+        var body = parentId is not null
+            ? JsonContent.Create(new { name, parentId })
+            : JsonContent.Create(new { name });
+        var response = await httpClient.PostAsync("api/tags", body);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<ImmichTag>(JsonOptions))!;
+    }
+
+    public async Task UpdateTagAsync(string tagId, string? name = null, string? parentId = null)
+    {
+        var payload = new Dictionary<string, object?>();
+        if (name is not null) payload["name"] = name;
+        if (parentId is not null) payload["parentId"] = parentId;
+
+        var body = JsonContent.Create(payload);
+        var response = await httpClient.PutAsync($"api/tags/{tagId}", body);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteTagAsync(string tagId)
+    {
+        var response = await httpClient.DeleteAsync($"api/tags/{tagId}");
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<List<string>> GetAssetIdsByTagAsync(string tagId)
+    {
+        var assetIds = new List<string>();
+        int page = 1;
+        while (true)
+        {
+            var body = JsonContent.Create(new { page, size = 100, tagIds = new[] { tagId } });
+            var response = await httpClient.PostAsync("api/search/metadata", body);
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<ImmichSearchResponse>(JsonOptions);
+            var items = result?.Assets.Items;
+            if (items is null || items.Length == 0)
+                break;
+
+            assetIds.AddRange(items.Select(i => i.Id));
+
+            if (result!.Assets.NextPage is null)
+                break;
+
+            page++;
+        }
+        return assetIds;
+    }
+
+    public async Task AssignTagToAssetsAsync(string tagId, IList<string> assetIds)
+    {
+        var body = JsonContent.Create(new { ids = assetIds });
+        var response = await httpClient.PutAsync($"api/tags/{tagId}/assets", body);
+        response.EnsureSuccessStatusCode();
+    }
+}
