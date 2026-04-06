@@ -70,4 +70,10 @@ public class ImmichService(HttpClient httpClient)
         var response = await httpClient.PutAsync($"api/tags/{tagId}/assets", body);
         response.EnsureSuccessStatusCode();
     }
+
+    public async Task DeleteTagAsync(string tagId)
+    {
+        var response = await httpClient.DeleteAsync($"api/tags/{tagId}");
+        response.EnsureSuccessStatusCode();
+    }
 }

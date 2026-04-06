@@ -3,6 +3,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using ollama2immich.Services;
 
+bool resetMode = args.Contains("--reset", StringComparer.OrdinalIgnoreCase);
+
 var host = Host.CreateDefaultBuilder(args)
     .ConfigureAppConfiguration(config => config
         .AddJsonFile("appsettings.json", optional: false)
@@ -18,7 +20,7 @@ var host = Host.CreateDefaultBuilder(args)
         var ollamaModel  = cfg["Ollama:Model"] ?? "llava";
         var ollamaPrompt = cfg["Ollama:Prompt"] ?? string.Empty;
 
-        if (string.IsNullOrWhiteSpace(ollamaPrompt))
+        if (!resetMode && string.IsNullOrWhiteSpace(ollamaPrompt))
         {
             Console.Error.WriteLine("ERROR: Ollama:Prompt is not set in appsettings.json.");
             Environment.Exit(1);
@@ -37,21 +39,31 @@ var host = Host.CreateDefaultBuilder(args)
             client.Timeout = TimeSpan.FromSeconds(30);
         });
 
-        services.AddSingleton(sp =>
+        if (!resetMode)
         {
-            var http = new HttpClient
+            services.AddSingleton(sp =>
             {
-                BaseAddress = new Uri(ollamaBase!),
-                Timeout = TimeSpan.FromMinutes(5)
-            };
-            return new OllamaService(http, ollamaModel, ollamaPrompt);
-        });
+                var http = new HttpClient
+                {
+                    BaseAddress = new Uri(ollamaBase!),
+                    Timeout = TimeSpan.FromMinutes(5)
+                };
+                return new OllamaService(http, ollamaModel, ollamaPrompt);
+            });
+        }
     })
     .Build();
 
 var immich = host.Services.GetRequiredService<ImmichService>();
-var ollama = host.Services.GetRequiredService<OllamaService>();
 var config = host.Services.GetRequiredService<IConfiguration>();
+
+if (resetMode)
+{
+    await RunResetAsync(immich);
+    return;
+}
+
+var ollama = host.Services.GetRequiredService<OllamaService>();
 
 int concurrent = int.TryParse(config["Processing:ConcurrentAssets"], out var c) ? c : 2;
 int pageSize   = int.TryParse(config["Processing:PageSize"], out var p) ? p : 50;
@@ -132,3 +144,43 @@ await Task.WhenAll(tasks);
 
 Console.WriteLine();
 Console.WriteLine($"Done. Processed: {processed}, Skipped: {skipped}, Failed: {failed}");
+
+static async Task RunResetAsync(ImmichService immich)
+{
+    Console.WriteLine("=== RESET MODE ===");
+    Console.WriteLine("Clearing descriptions and deleting all tags...");
+    Console.WriteLine();
+
+    int cleared = 0;
+    await foreach (var asset in immich.GetAllAssetsAsync())
+    {
+        if (!string.Equals(asset.Type, "IMAGE", StringComparison.OrdinalIgnoreCase))
+            continue;
+        if (string.IsNullOrWhiteSpace(asset.ExifInfo?.Description))
+            continue;
+
+        Console.WriteLine($"[CLEAR] {asset.Id}");
+        await immich.UpdateDescriptionAsync(asset.Id, "");
+        cleared++;
+    }
+
+    var tags = await immich.GetTagsAsync();
+    int deleted = 0, skippedTags = 0;
+    foreach (var tag in tags)
+    {
+        try
+        {
+            Console.WriteLine($"[DELETE TAG] {tag.Name} ({tag.Id})");
+            await immich.DeleteTagAsync(tag.Id);
+            deleted++;
+        }
+        catch (HttpRequestException ex)
+        {
+            Console.WriteLine($"[SKIP TAG] {tag.Name}: {ex.StatusCode} — skipped");
+            skippedTags++;
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"Reset complete. Cleared {cleared} description(s), deleted {deleted} tag(s), skipped {skippedTags} tag(s).");
+}
