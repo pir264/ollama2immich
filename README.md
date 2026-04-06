@@ -94,7 +94,9 @@ dotnet run -- --reset
 
 Een Blazor Server web-applicatie die de tag-collectie in Immich opschoont. Na het automatisch taggen met `ollama2immich` ontstaat er een grote, vlakke lijst tags — met duplicaten, meervoudsvormen en gemengde talen. Deze tool organiseert dat via drie stappen.
 
-### Werking
+De app heeft twee functies, bereikbaar via de navigatiebalk:
+
+### Tags beheren (`/`)
 
 1. **Analyseren** — de app haalt alle tags op uit Immich en stuurt ze naar Ollama.
 2. **Voorstellen** — Ollama stelt drie soorten wijzigingen voor:
@@ -103,6 +105,14 @@ Een Blazor Server web-applicatie die de tag-collectie in Immich opschoont. Na he
    - **Hiërarchie** — abstracte parent-tags bedenken en toewijzen (`boom`, `waterval` → parent `natuur`); nieuwe parent-tags worden aangemaakt indien nodig
 3. **Goedkeuren** — elke suggestie verschijnt als checkbox; de gebruiker vinkelt aan wat toegepast moet worden.
 4. **Toepassen** — na bevestiging worden de wijzigingen in volgorde doorgevoerd naar Immich, met een live progress-log in de browser.
+
+### Hiërarchie genereren (`/genereer-tags`)
+
+Laat Ollama — zonder foto's te analyseren — een algemeen bruikbare taghiërarchie bedenken voor een fotobibliotheek. Configureerbaar: maximaal aantal tags (standaard 100) en hiërarchiediepte (standaard 3). Alle tags zijn in het Nederlands, enkelvoud en kleine letters. Voorbeeldpaden: `locatie → land → italië`, `natuur → kleur → rood`.
+
+1. **Genereren** — Ollama redeneert over categorieën zoals locatie, natuur, mensen, gebouwen, voedsel, vervoer, seizoenen, kleuren en activiteiten.
+2. **Goedkeuren** — elk tagpad verschijnt als checkbox; selecteer wat relevant is.
+3. **Toepassen** — de geselecteerde paden worden als geneste tags in Immich opgeslagen (met parent-child relaties). Bestaande tags worden hergebruikt.
 
 ### Configuratie
 
@@ -127,7 +137,10 @@ Alle beschikbare instellingen:
   "Ollama": {
     "BaseUrl": "http://localhost:11434",
     "Model": "gemma4",
-    "TagPrompt": "Je krijgt een lijst met Immich fototags. ..."
+    "TagPrompt": "Je krijgt een lijst met Immich fototags. ...",
+    "MaxGeneratedTags": 100,
+    "TagGeneratorDepth": 3,
+    "TagGeneratorPrompt": "Je bent een expert in het organiseren van fotobibliotheken. ..."
   }
 }
 ```
