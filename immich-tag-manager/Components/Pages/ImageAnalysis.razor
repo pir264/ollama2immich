@@ -18,21 +18,32 @@
     <div style="display:flex; flex-direction:column; gap:0.75rem; max-width:360px; margin-bottom:1.25rem;">
         <div style="display:flex; gap:1rem;">
             <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;">
-                <input type="radio" name="mode" checked="@(!_tagExistingMode)"
-                       @onchange="() => _tagExistingMode = false" />
+                <input type="radio" name="mode" checked="@(_mode == AnalysisMode.Normal)"
+                       @onchange="() => _mode = AnalysisMode.Normal" />
                 Normaal
             </label>
             <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;" title="Wijs alleen bestaande tags toe, geen nieuwe tags of beschrijvingen">
-                <input type="radio" name="mode" checked="@_tagExistingMode"
-                       @onchange="() => _tagExistingMode = true" />
+                <input type="radio" name="mode" checked="@(_mode == AnalysisMode.TagExisting)"
+                       @onchange="() => _mode = AnalysisMode.TagExisting" />
                 Bestaande tags
             </label>
+            <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;" title="Verwijder alle beschrijvingen en tags uit Immich">
+                <input type="radio" name="mode" checked="@(_mode == AnalysisMode.Reset)"
+                       @onchange="() => _mode = AnalysisMode.Reset" />
+                Reset
+            </label>
         </div>
-        @if (_tagExistingMode)
+        @if (_mode == AnalysisMode.TagExisting)
         {
             <p style="font-size:0.85em;color:#555;margin:0;">
                 Ollama selecteert per foto welke bestaande Immich-tags van toepassing zijn.
                 Geen nieuwe tags of beschrijvingen.
+            </p>
+        }
+        else if (_mode == AnalysisMode.Reset)
+        {
+            <p style="font-size:0.85em;color:#721c24;background:#f8d7da;border:1px solid #f5c6cb;border-radius:4px;padding:0.5rem;margin:0;">
+                <strong>Let op:</strong> dit verwijdert alle beschrijvingen en tags uit Immich. Dit kan niet ongedaan worden gemaakt.
             </p>
         }
         else
@@ -42,34 +53,57 @@
                 Foto's met bestaande beschrijving worden overgeslagen.
             </p>
         }
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <label for="feedSize">Zichtbare foto's:</label>
-            <input type="number" id="feedSize" @bind="_feedSize" min="1" max="50" style="width:5rem;" />
-        </div>
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <label for="concurrent">Gelijktijdig:</label>
-            <input type="number" id="concurrent" @bind="_concurrentAssets" min="1" max="10" style="width:5rem;" />
-        </div>
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <label for="pageSize">Paginagrootte:</label>
-            <input type="number" id="pageSize" @bind="_pageSize" min="10" max="200" style="width:5rem;" />
-        </div>
+        @if (_mode != AnalysisMode.Reset)
+        {
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <label for="feedSize">Zichtbare foto's:</label>
+                <input type="number" id="feedSize" @bind="_feedSize" min="1" max="50" style="width:5rem;" />
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <label for="concurrent">Gelijktijdig:</label>
+                <input type="number" id="concurrent" @bind="_concurrentAssets" min="1" max="10" style="width:5rem;" />
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <label for="pageSize">Paginagrootte:</label>
+                <input type="number" id="pageSize" @bind="_pageSize" min="10" max="200" style="width:5rem;" />
+            </div>
+        }
     </div>
-    <button class="btn btn-primary" @onclick="StartAsync">Start</button>
+    <button class="btn btn-primary" @onclick="StartAsync">@(_mode == AnalysisMode.Reset ? "Reset starten" : "Start")</button>
 }
 else
 {
-    <div class="counter-bar">
-        Modus: <strong>@(_tagExistingMode ? "Bestaande tags" : "Normaal")</strong>
-        &nbsp;|&nbsp;
-        Verwerkt: <strong>@_processed</strong> &nbsp;|&nbsp;
-        Overgeslagen: <strong>@_skipped</strong> &nbsp;|&nbsp;
-        Mislukt: <strong>@_failed</strong>
-        @if (_state == PageState.Running)
-        {
-            <span style="margin-left:1rem;"><span class="spinner"></span></span>
-        }
-    </div>
+    @if (_mode == AnalysisMode.Reset)
+    {
+        <div class="counter-bar">
+            Modus: <strong>Reset</strong>
+            &nbsp;|&nbsp;
+            Beschrijvingen gewist: <strong>@_cleared</strong> &nbsp;|&nbsp;
+            Tags verwijderd: <strong>@_deletedTags</strong>
+            @if (_skippedTags > 0)
+            {
+                <span>&nbsp;|&nbsp;Tags overgeslagen: <strong>@_skippedTags</strong></span>
+            }
+            @if (_state == PageState.Running)
+            {
+                <span style="margin-left:1rem;"><span class="spinner"></span></span>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="counter-bar">
+            Modus: <strong>@(_mode == AnalysisMode.TagExisting ? "Bestaande tags" : "Normaal")</strong>
+            &nbsp;|&nbsp;
+            Verwerkt: <strong>@_processed</strong> &nbsp;|&nbsp;
+            Overgeslagen: <strong>@_skipped</strong> &nbsp;|&nbsp;
+            Mislukt: <strong>@_failed</strong>
+            @if (_state == PageState.Running)
+            {
+                <span style="margin-left:1rem;"><span class="spinner"></span></span>
+            }
+        </div>
+    }
 
     @if (_state == PageState.Running)
     {
@@ -80,76 +114,87 @@ else
         <p>
             @if (_state == PageState.Done)
             {
-                <em>Alle foto's verwerkt.</em>
+                @if (_mode == AnalysisMode.Reset)
+                {
+                    <em>Reset voltooid.</em>
+                }
+                else
+                {
+                    <em>Alle foto's verwerkt.</em>
+                }
             }
             else
             {
                 <em>Gestopt door gebruiker.</em>
             }
         </p>
-        <button class="btn btn-primary" @onclick="Reset">Opnieuw starten</button>
+        <button class="btn btn-primary" @onclick="ResetPage">Opnieuw starten</button>
     }
 
-    <div class="photo-grid">
-        @for (int i = _feed.Count - 1; i >= 0; i--)
-        {
-            var item = _feed[i];
-            <div class="photo-card">
-                <div style="flex-shrink:0;">
-                    @if (item.ThumbnailBytes is { Length: > 0 })
-                    {
-                        <img src="@item.ThumbnailDataUrl" alt="thumbnail" />
-                    }
-                    else
-                    {
-                        <div style="width:120px;height:90px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;">
-                            <span class="spinner"></span>
-                        </div>
-                    }
-                </div>
-                <div class="photo-info">
-                    <div style="margin-bottom:0.4rem;">
-                        <span class="@StatusBadgeClass(item.Status)">@StatusLabel(item.Status)</span>
-                        <span style="font-size:0.75em;color:#999;margin-left:0.5rem;">@item.AssetId[..8]…</span>
+    @if (_mode != AnalysisMode.Reset)
+    {
+        <div class="photo-grid">
+            @for (int i = _feed.Count - 1; i >= 0; i--)
+            {
+                var item = _feed[i];
+                <div class="photo-card">
+                    <div style="flex-shrink:0;">
+                        @if (item.ThumbnailBytes is { Length: > 0 })
+                        {
+                            <img src="@item.ThumbnailDataUrl" alt="thumbnail" />
+                        }
+                        else
+                        {
+                            <div style="width:120px;height:90px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;">
+                                <span class="spinner"></span>
+                            </div>
+                        }
                     </div>
-                    @if (!string.IsNullOrWhiteSpace(item.Description))
-                    {
-                        <div style="font-size:0.9em;margin-bottom:0.4rem;">@item.Description</div>
-                    }
-                    @if (item.Tags.Length > 0)
-                    {
+                    <div class="photo-info">
                         <div style="margin-bottom:0.4rem;">
-                            @foreach (var tag in item.Tags)
+                            <span class="@StatusBadgeClass(item.Status)">@StatusLabel(item.Status)</span>
+                            <span style="font-size:0.75em;color:#999;margin-left:0.5rem;">@item.AssetId[..8]…</span>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(item.Description))
+                        {
+                            <div style="font-size:0.9em;margin-bottom:0.4rem;">@item.Description</div>
+                        }
+                        @if (item.Tags.Length > 0)
+                        {
+                            <div style="margin-bottom:0.4rem;">
+                                @foreach (var tag in item.Tags)
+                                {
+                                    <span class="tag-chip">@tag</span>
+                                }
+                            </div>
+                        }
+                        <div class="save-indicator">
+                            @if (item.DescriptionSaved)
                             {
-                                <span class="tag-chip">@tag</span>
+                                <span style="color:#155724;">✓ Beschrijving opgeslagen</span>
+                            }
+                            @if (item.TagsSaved)
+                            {
+                                <span style="color:#155724; margin-left:0.5rem;">✓ Tags opgeslagen</span>
                             }
                         </div>
-                    }
-                    <div class="save-indicator">
-                        @if (item.DescriptionSaved)
+                        @if (!string.IsNullOrWhiteSpace(item.ErrorMessage))
                         {
-                            <span style="color:#155724;">✓ Beschrijving opgeslagen</span>
-                        }
-                        @if (item.TagsSaved)
-                        {
-                            <span style="color:#155724; margin-left:0.5rem;">✓ Tags opgeslagen</span>
+                            <div style="color:#721c24;font-size:0.85em;margin-top:0.25rem;">✗ @item.ErrorMessage</div>
                         }
                     </div>
-                    @if (!string.IsNullOrWhiteSpace(item.ErrorMessage))
-                    {
-                        <div style="color:#721c24;font-size:0.85em;margin-top:0.25rem;">✗ @item.ErrorMessage</div>
-                    }
                 </div>
-            </div>
-        }
-    </div>
+            }
+        </div>
+    }
 }
 
 @code {
     private enum PageState { Idle, Running, Stopped, Done }
+    private enum AnalysisMode { Normal, TagExisting, Reset }
 
     private PageState _state = PageState.Idle;
-    private bool _tagExistingMode;
+    private AnalysisMode _mode = AnalysisMode.Normal;
 
     private int _feedSize;
     private int _concurrentAssets;
@@ -159,6 +204,11 @@ else
     private int _processed;
     private int _skipped;
     private int _failed;
+
+    // Reset-mode counters
+    private int _cleared;
+    private int _deletedTags;
+    private int _skippedTags;
 
     private CancellationTokenSource? _cts;
     private ConcurrentDictionary<string, string> _tagCache = new();
@@ -177,10 +227,13 @@ else
         _processed = 0;
         _skipped = 0;
         _failed = 0;
+        _cleared = 0;
+        _deletedTags = 0;
+        _skippedTags = 0;
         _tagCache = new ConcurrentDictionary<string, string>();
         _cts = new CancellationTokenSource();
         _state = PageState.Running;
-        _ = Task.Run(RunPipelineAsync);
+        _ = Task.Run(_mode == AnalysisMode.Reset ? RunResetPipelineAsync : RunPipelineAsync);
         await Task.CompletedTask;
     }
 
@@ -189,13 +242,16 @@ else
         _cts?.Cancel();
     }
 
-    private void Reset()
+    private void ResetPage()
     {
         _state = PageState.Idle;
         _feed.Clear();
         _processed = 0;
         _skipped = 0;
         _failed = 0;
+        _cleared = 0;
+        _deletedTags = 0;
+        _skippedTags = 0;
     }
 
     private async Task RunPipelineAsync()
@@ -206,7 +262,7 @@ else
             foreach (var tag in tags)
                 _tagCache.TryAdd(tag.Name.ToLowerInvariant(), tag.Id);
 
-            if (_tagExistingMode && _tagCache.IsEmpty)
+            if (_mode == AnalysisMode.TagExisting && _tagCache.IsEmpty)
             {
                 await InvokeAsync(() =>
                 {
@@ -232,7 +288,7 @@ else
                 }
 
                 // In normal mode: skip assets that already have a description
-                if (!_tagExistingMode && !string.IsNullOrWhiteSpace(asset.ExifInfo?.Description))
+                if (_mode == AnalysisMode.Normal && !string.IsNullOrWhiteSpace(asset.ExifInfo?.Description))
                 {
                     Interlocked.Increment(ref _skipped);
                     await InvokeAsync(StateHasChanged);
@@ -249,6 +305,59 @@ else
             }
 
             await Task.WhenAll(tasks);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+        finally
+        {
+            var finalState = _cts?.Token.IsCancellationRequested == true ? PageState.Stopped : PageState.Done;
+            await InvokeAsync(() =>
+            {
+                _state = finalState;
+                StateHasChanged();
+            });
+        }
+    }
+
+    private async Task RunResetPipelineAsync()
+    {
+        try
+        {
+            await foreach (var asset in AssetService.GetAllAssetsAsync(50, _cts!.Token))
+            {
+                if (_cts.Token.IsCancellationRequested)
+                    break;
+
+                if (!string.Equals(asset.Type, "IMAGE", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (string.IsNullOrWhiteSpace(asset.ExifInfo?.Description))
+                    continue;
+
+                await AssetService.UpdateDescriptionAsync(asset.Id, "");
+                Interlocked.Increment(ref _cleared);
+                await InvokeAsync(StateHasChanged);
+            }
+
+            var allTags = await TagService.GetTagsAsync();
+            foreach (var tag in allTags)
+            {
+                if (_cts!.Token.IsCancellationRequested)
+                    break;
+
+                try
+                {
+                    await TagService.DeleteTagAsync(tag.Id);
+                    Interlocked.Increment(ref _deletedTags);
+                }
+                catch (HttpRequestException)
+                {
+                    Interlocked.Increment(ref _skippedTags);
+                }
+                await InvokeAsync(StateHasChanged);
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception)
@@ -285,7 +394,7 @@ else
             item.Status = AssetItemStatus.Analyzing;
             await InvokeAsync(StateHasChanged);
 
-            if (_tagExistingMode)
+            if (_mode == AnalysisMode.TagExisting)
             {
                 await ProcessTagExistingAsync(item);
             }
