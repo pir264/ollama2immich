@@ -112,11 +112,14 @@ Pages:
   "Ollama": {
     "BaseUrl", "Model",
     "TagPrompt", "TagGeneratorPrompt", "MaxGeneratedTags", "TagGeneratorDepth",
-    "ImageModel", "ImagePrompt", "TagExistingPrompt"
+    "ImageModel", "ImagePrompt", "TagExistingPrompt",
+    "ImageInstances": [{ "DisplayName", "BaseUrl", "Model" }]
   },
   "ImageAnalysis": { "FeedSize", "ConcurrentAssets", "PageSize" }
 }
 ```
+
+`ImageInstances` is optional. When empty, the default `BaseUrl`/`ImageModel` is used as a single fallback instance.
 
 ### UI patterns
 
@@ -128,11 +131,21 @@ Pages:
 
 ### Photo analysis page (`/analyseer-fotos`)
 
-- Two modes selectable via radio buttons: **Normaal** and **Bestaande tags**
-- Rolling feed of last N photos (newest first), each showing thumbnail, status badge, description, tag chips, save indicators and error
-- `AssetProcessingItem` class holds per-photo mutable state
+- Three modes selectable via radio buttons: **Normaal**, **Bestaande tags**, **Reset**
+- Rolling feed of last N photos (newest first), each showing thumbnail, status badge, instance name, description, tag chips, save indicators and error
+- `AssetProcessingItem` class holds per-photo mutable state, including `InstanceDisplayName`
 - `ConcurrentDictionary<string, string>` + `lock` block for tag-cache race conditions
 - `IDisposable` on the component cancels processing on navigation
+
+#### Multi-instance Ollama pool
+
+- `OllamaImageInstances` (from `AppSettings`) drives a pool of `InstanceEntry` records built at `StartAsync()`
+- Each `InstanceEntry` holds its own `OllamaImageService` (with `baseUrlOverride`/`modelOverride`), a dedicated `SemaphoreSlim(_concurrentAssets)`, and an owned `HttpClient` (disposed on component teardown)
+- Photos are assigned round-robin (`assetIndex % instances.Count`) before the semaphore wait
+- Total concurrency = N instances × `ConcurrentAssets`
+- When `OllamaImageInstances` is empty, falls back to the injected `IOllamaImageService` singleton with display name "Standaard"
+- Per-instance processed count tracked in `Dictionary<string, int> _instanceStats`; shown as a table at end/stop
+- `OllamaImageService` accepts optional `baseUrlOverride` and `modelOverride` constructor params; prompts are always read live from `IAppSettingsService`
 
 ## Testing
 

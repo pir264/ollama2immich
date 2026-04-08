@@ -14,6 +14,7 @@ public enum AssetItemStatus
 public class AssetProcessingItem
 {
     public string AssetId { get; init; } = string.Empty;
+    public string? InstanceDisplayName { get; set; }
     public AssetItemStatus Status { get; set; } = AssetItemStatus.Queued;
     public byte[]? ThumbnailBytes { get; set; }
     public string? Description { get; set; }

@@ -5,6 +5,7 @@
 @inject IOllamaImageService OllamaImageService
 @inject IImmichTagService TagService
 @inject ImmichTagManager.Services.IAppSettingsService SettingsService
+@inject ILoggerFactory LoggerFactory
 
 @using System.Collections.Concurrent
 @using System.Threading
@@ -60,7 +61,7 @@
                 <input type="number" id="feedSize" @bind="_feedSize" min="1" max="50" style="width:5rem;" />
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center;">
-                <label for="concurrent">Gelijktijdig:</label>
+                <label for="concurrent">Gelijktijdig per instantie:</label>
                 <input type="number" id="concurrent" @bind="_concurrentAssets" min="1" max="10" style="width:5rem;" />
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -129,6 +130,28 @@ else
             }
         </p>
         <button class="btn btn-primary" @onclick="ResetPage">Opnieuw starten</button>
+
+        @if (_mode != AnalysisMode.Reset && _instanceStats.Count > 0)
+        {
+            <h3 style="margin-top:1.5rem;">Verwerkt per instantie</h3>
+            <table style="border-collapse:collapse;">
+                <thead>
+                    <tr>
+                        <th style="text-align:left;padding:0.3rem 0.8rem;border-bottom:1px solid #ccc;">Instantie</th>
+                        <th style="text-align:right;padding:0.3rem 0.8rem;border-bottom:1px solid #ccc;">Foto's</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var kv in _instanceStats)
+                    {
+                        <tr>
+                            <td style="padding:0.25rem 0.8rem;">@kv.Key</td>
+                            <td style="text-align:right;padding:0.25rem 0.8rem;">@kv.Value</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
     }
 
     @if (_mode != AnalysisMode.Reset)
@@ -153,6 +176,10 @@ else
                     <div class="photo-info">
                         <div style="margin-bottom:0.4rem;">
                             <span class="@StatusBadgeClass(item.Status)">@StatusLabel(item.Status)</span>
+                            @if (!string.IsNullOrWhiteSpace(item.InstanceDisplayName))
+                            {
+                                <span style="font-size:0.75em;color:#555;margin-left:0.5rem;">via @item.InstanceDisplayName</span>
+                            }
                             <span style="font-size:0.75em;color:#999;margin-left:0.5rem;">@item.AssetId[..8]…</span>
                         </div>
                         @if (!string.IsNullOrWhiteSpace(item.Description))
@@ -193,6 +220,12 @@ else
     private enum PageState { Idle, Running, Stopped, Done }
     private enum AnalysisMode { Normal, TagExisting, Reset }
 
+    private sealed record InstanceEntry(
+        string DisplayName,
+        IOllamaImageService Service,
+        SemaphoreSlim Semaphore,
+        HttpClient? OwnedHttpClient);
+
     private PageState _state = PageState.Idle;
     private AnalysisMode _mode = AnalysisMode.Normal;
 
@@ -214,12 +247,49 @@ else
     private ConcurrentDictionary<string, string> _tagCache = new();
     private readonly object _tagCreateLock = new();
 
+    private List<InstanceEntry> _instances = [];
+    private readonly Dictionary<string, int> _instanceStats = new();
+
     protected override void OnInitialized()
     {
         var s = SettingsService.GetSettings();
         _feedSize = s.FeedSize;
         _concurrentAssets = s.ConcurrentAssets;
         _pageSize = s.PageSize;
+    }
+
+    private List<InstanceEntry> BuildInstancePool()
+    {
+        foreach (var old in _instances)
+            old.OwnedHttpClient?.Dispose();
+        _instances = [];
+
+        var s = SettingsService.GetSettings();
+        if (s.OllamaImageInstances.Count == 0)
+        {
+            _instanceStats["Standaard"] = 0;
+            return [new InstanceEntry(
+                "Standaard",
+                OllamaImageService,
+                new SemaphoreSlim(_concurrentAssets),
+                null)];
+        }
+
+        var pool = new List<InstanceEntry>();
+        foreach (var inst in s.OllamaImageInstances)
+        {
+            var displayName = string.IsNullOrWhiteSpace(inst.DisplayName) ? inst.BaseUrl : inst.DisplayName;
+            var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            var svc = new OllamaImageService(
+                http,
+                SettingsService,
+                LoggerFactory.CreateLogger<OllamaImageService>(),
+                inst.BaseUrl,
+                inst.Model);
+            _instanceStats[displayName] = 0;
+            pool.Add(new InstanceEntry(displayName, svc, new SemaphoreSlim(_concurrentAssets), http));
+        }
+        return pool;
     }
 
     private async Task StartAsync()
@@ -232,6 +302,8 @@ else
         _deletedTags = 0;
         _skippedTags = 0;
         _tagCache = new ConcurrentDictionary<string, string>();
+        _instanceStats.Clear();
+        _instances = BuildInstancePool();
         _cts = new CancellationTokenSource();
         _state = PageState.Running;
         _ = Task.Run(_mode == AnalysisMode.Reset ? RunResetPipelineAsync : RunPipelineAsync);
@@ -273,8 +345,8 @@ else
                 return;
             }
 
-            var semaphore = new SemaphoreSlim(_concurrentAssets);
             var tasks = new List<Task>();
+            int assetIndex = 0;
 
             await foreach (var asset in AssetService.GetAllAssetsAsync(_pageSize, _cts!.Token))
             {
@@ -296,13 +368,17 @@ else
                     continue;
                 }
 
-                var item = new AssetProcessingItem { AssetId = asset.Id };
+                var entry = _instances[assetIndex % _instances.Count];
+                assetIndex++;
+
+                var item = new AssetProcessingItem { AssetId = asset.Id, InstanceDisplayName = entry.DisplayName };
                 AddToFeed(item);
                 await InvokeAsync(StateHasChanged);
 
-                await semaphore.WaitAsync(_cts.Token);
-                var capturedItem = item;
-                tasks.Add(Task.Run(() => ProcessAssetAsync(capturedItem, semaphore)));
+                await entry.Semaphore.WaitAsync(_cts.Token);
+                var capturedItem  = item;
+                var capturedEntry = entry;
+                tasks.Add(Task.Run(() => ProcessAssetAsync(capturedItem, capturedEntry)));
             }
 
             await Task.WhenAll(tasks);
@@ -383,7 +459,7 @@ else
             _feed.RemoveAt(0);
     }
 
-    private async Task ProcessAssetAsync(AssetProcessingItem item, SemaphoreSlim semaphore)
+    private async Task ProcessAssetAsync(AssetProcessingItem item, InstanceEntry entry)
     {
         try
         {
@@ -397,16 +473,18 @@ else
 
             if (_mode == AnalysisMode.TagExisting)
             {
-                await ProcessTagExistingAsync(item);
+                await ProcessTagExistingAsync(item, entry.Service);
             }
             else
             {
-                await ProcessNormalAsync(item);
+                await ProcessNormalAsync(item, entry.Service);
             }
 
             item.TagsSaved = true;
             item.Status = AssetItemStatus.Done;
             Interlocked.Increment(ref _processed);
+            lock (_instanceStats)
+                _instanceStats[entry.DisplayName]++;
         }
         catch (OperationCanceledException)
         {
@@ -420,14 +498,14 @@ else
         }
         finally
         {
-            semaphore.Release();
+            entry.Semaphore.Release();
             await InvokeAsync(StateHasChanged);
         }
     }
 
-    private async Task ProcessNormalAsync(AssetProcessingItem item)
+    private async Task ProcessNormalAsync(AssetProcessingItem item, IOllamaImageService service)
     {
-        var (desc, tags) = await OllamaImageService.AnalyzeImageAsync(item.ThumbnailBytes!);
+        var (desc, tags) = await service.AnalyzeImageAsync(item.ThumbnailBytes!);
         item.Description = desc;
         item.Tags = tags;
 
@@ -459,10 +537,10 @@ else
         }
     }
 
-    private async Task ProcessTagExistingAsync(AssetProcessingItem item)
+    private async Task ProcessTagExistingAsync(AssetProcessingItem item, IOllamaImageService service)
     {
         var tagNames = _tagCache.Keys.ToArray();
-        var matchedTags = await OllamaImageService.SelectTagsAsync(item.ThumbnailBytes!, tagNames);
+        var matchedTags = await service.SelectTagsAsync(item.ThumbnailBytes!, tagNames);
 
         // Filter to only tags we actually have in the cache (Ollama may hallucinate)
         var validTags = matchedTags
@@ -509,5 +587,7 @@ else
     {
         _cts?.Cancel();
         _cts?.Dispose();
+        foreach (var entry in _instances)
+            entry.OwnedHttpClient?.Dispose();
     }
 }

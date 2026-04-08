@@ -8,7 +8,9 @@ namespace ImmichTagManager.Services;
 public class OllamaImageService(
     HttpClient httpClient,
     IAppSettingsService settings,
-    ILogger<OllamaImageService> logger)
+    ILogger<OllamaImageService> logger,
+    string? baseUrlOverride = null,
+    string? modelOverride = null)
     : IOllamaImageService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -39,15 +41,21 @@ public class OllamaImageService(
     public async Task<(string Description, string[] Tags)> AnalyzeImageAsync(byte[] imageBytes)
     {
         var s = settings.GetSettings();
+        var baseUrl = (baseUrlOverride ?? s.OllamaBaseUrl).TrimEnd('/');
+        var model   = modelOverride ?? s.OllamaImageModel;
         var base64 = Convert.ToBase64String(imageBytes);
-        var request = new OllamaImageRequest(s.OllamaImageModel, s.ImagePrompt, [base64], Stream: false, Format: AnalyzeSchema, Options: Options);
+        var request = new OllamaImageRequest(model, s.ImagePrompt, [base64], Stream: false, Format: AnalyzeSchema, Options: Options);
 
-        var response = await httpClient.PostAsJsonAsync(s.OllamaBaseUrl.TrimEnd('/') + "/api/generate", request);
+        var response = await httpClient.PostAsJsonAsync(baseUrl + "/api/generate", request);
         response.EnsureSuccessStatusCode();
 
-        var result = await response.Content.ReadFromJsonAsync<OllamaImageResponse>(JsonOptions);
+        var body = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(body))
+            throw new InvalidOperationException($"Ollama ({model} @ {baseUrl}) returned an empty response body.");
+
+        var result = JsonSerializer.Deserialize<OllamaImageResponse>(body, JsonOptions);
         if (result is null)
-            throw new InvalidOperationException("Empty response from Ollama.");
+            throw new InvalidOperationException($"Could not deserialize Ollama response: {body}");
 
         var analysis = JsonSerializer.Deserialize<OllamaImageAnalysis>(result.Response, JsonOptions);
         if (analysis is null || string.IsNullOrWhiteSpace(analysis.Description))
@@ -62,17 +70,23 @@ public class OllamaImageService(
     public async Task<string[]> SelectTagsAsync(byte[] imageBytes, string[] tagNames)
     {
         var s = settings.GetSettings();
+        var baseUrl = (baseUrlOverride ?? s.OllamaBaseUrl).TrimEnd('/');
+        var model   = modelOverride ?? s.OllamaImageModel;
         var tagList = string.Join("\n", tagNames.Select(t => $"- {t}"));
         var fullPrompt = $"{s.TagExistingPrompt}\n\nBeschikbare tags:\n{tagList}";
         var base64 = Convert.ToBase64String(imageBytes);
-        var request = new OllamaImageRequest(s.OllamaImageModel, fullPrompt, [base64], Stream: false, Format: SelectSchema, Options: Options);
+        var request = new OllamaImageRequest(model, fullPrompt, [base64], Stream: false, Format: SelectSchema, Options: Options);
 
-        var response = await httpClient.PostAsJsonAsync(s.OllamaBaseUrl.TrimEnd('/') + "/api/generate", request);
+        var response = await httpClient.PostAsJsonAsync(baseUrl + "/api/generate", request);
         response.EnsureSuccessStatusCode();
 
-        var result = await response.Content.ReadFromJsonAsync<OllamaImageResponse>(JsonOptions);
+        var body = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(body))
+            throw new InvalidOperationException($"Ollama ({model} @ {baseUrl}) returned an empty response body.");
+
+        var result = JsonSerializer.Deserialize<OllamaImageResponse>(body, JsonOptions);
         if (result is null)
-            throw new InvalidOperationException("Empty response from Ollama.");
+            throw new InvalidOperationException($"Could not deserialize Ollama response: {body}");
 
         var analysis = JsonSerializer.Deserialize<OllamaImageAnalysis>(result.Response, JsonOptions);
         return analysis?.Tags ?? [];

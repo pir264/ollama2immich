@@ -24,7 +24,9 @@ public class ImmichAssetService(HttpClient httpClient, IAppSettingsService setti
         var body = await response.Content.ReadAsStringAsync();
         logger.LogError("Immich {Operation} failed: {StatusCode} {ReasonPhrase} — {Body}",
             operation, (int)response.StatusCode, response.ReasonPhrase, body);
-        response.EnsureSuccessStatusCode();
+        throw new HttpRequestException(
+            $"{operation}: {(int)response.StatusCode} {response.ReasonPhrase} — {body}",
+            null, response.StatusCode);
     }
 
     public async IAsyncEnumerable<ImmichAsset> GetAllAssetsAsync(int pageSize = 50,

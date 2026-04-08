@@ -16,6 +16,14 @@ public class AppSettings
     public int FeedSize { get; set; } = 10;
     public int ConcurrentAssets { get; set; } = 2;
     public int PageSize { get; set; } = 50;
+    public List<OllamaImageInstance> OllamaImageInstances { get; set; } = [];
 
-    public AppSettings Clone() => (AppSettings)MemberwiseClone();
+    public AppSettings Clone()
+    {
+        var copy = (AppSettings)MemberwiseClone();
+        copy.OllamaImageInstances = OllamaImageInstances
+            .Select(i => new OllamaImageInstance { BaseUrl = i.BaseUrl, Model = i.Model, DisplayName = i.DisplayName })
+            .ToList();
+        return copy;
+    }
 }

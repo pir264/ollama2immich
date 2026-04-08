@@ -105,6 +105,37 @@
     </div>
 </div>
 
+<h2>Ollama instanties (fotoanalyse)</h2>
+<p style="font-size:0.85em;color:#555;max-width:600px;margin-top:0;">
+    Voeg meerdere Ollama-servers toe voor parallelle fotoanalyse. Foto's worden verdeeld per instantie (round-robin).
+    Laat leeg om de standaard Ollama-instelling hierboven te gebruiken.
+</p>
+<div style="display:flex;flex-direction:column;gap:0.75rem;max-width:700px;">
+    @for (int i = 0; i < _form.OllamaImageInstances.Count; i++)
+    {
+        var idx = i;
+        var inst = _form.OllamaImageInstances[idx];
+        <div style="border:1px solid #ccc;border-radius:4px;padding:0.75rem;display:flex;flex-direction:column;gap:0.5rem;">
+            <div style="display:flex;gap:0.5rem;align-items:center;">
+                <input placeholder="Naam (bijv. GPU-server)" @bind="inst.DisplayName"
+                       style="padding:0.4rem;flex:1;" />
+                <button class="btn" style="color:#721c24;" @onclick="() => RemoveInstance(idx)">
+                    Verwijderen
+                </button>
+            </div>
+            <div style="display:flex;gap:0.5rem;">
+                <input placeholder="Base URL (bijv. http://192.168.1.10:11434)"
+                       @bind="inst.BaseUrl" style="padding:0.4rem;flex:2;" />
+                <input placeholder="Model (bijv. llava)"
+                       @bind="inst.Model" style="padding:0.4rem;flex:1;" />
+            </div>
+        </div>
+    }
+    <button class="btn btn-primary" style="align-self:flex-start;" @onclick="AddInstance">
+        + Instantie toevoegen
+    </button>
+</div>
+
 <br />
 <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving">
     @if (_saving) { <span class="spinner"></span> } Opslaan
@@ -169,6 +200,15 @@
             __builder.CloseElement();
         }
     };
+
+    private void AddInstance() =>
+        _form.OllamaImageInstances.Add(new ImmichTagManager.Models.OllamaImageInstance());
+
+    private void RemoveInstance(int index)
+    {
+        if (index >= 0 && index < _form.OllamaImageInstances.Count)
+            _form.OllamaImageInstances.RemoveAt(index);
+    }
 
     private async Task RefreshModelsAsync()
     {

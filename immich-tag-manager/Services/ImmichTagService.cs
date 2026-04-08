@@ -24,7 +24,9 @@ public class ImmichTagService(HttpClient httpClient, IAppSettingsService setting
         var body = await response.Content.ReadAsStringAsync();
         logger.LogError("Immich {Operation} failed: {StatusCode} {ReasonPhrase} — {Body}",
             operation, (int)response.StatusCode, response.ReasonPhrase, body);
-        response.EnsureSuccessStatusCode();
+        throw new HttpRequestException(
+            $"{operation}: {(int)response.StatusCode} {response.ReasonPhrase} — {body}",
+            null, response.StatusCode);
     }
 
     public async Task<List<ImmichTag>> GetTagsAsync()

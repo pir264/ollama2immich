@@ -133,18 +133,29 @@ Laat Ollama een algemeen bruikbare taghiërarchie bedenken voor een fotobiblioth
 
 Voert de afbeeldingsverwerking van `ollama2immich` uit vanuit de browser, met een live feed van de laatste N foto's die worden verwerkt.
 
-Twee modi (kiesbaar via radiobuttons):
+Drie modi (kiesbaar via radiobuttons):
 
 **Normaal** — Ollama genereert per foto een beschrijving en nieuwe tags. Foto's met een bestaande beschrijving worden overgeslagen.
 
 **Bestaande tags** — Ollama selecteert per foto welke bestaande Immich-tags van toepassing zijn. Geen nieuwe tags of beschrijvingen. Geschikt als de taghiërarchie al is opgebouwd.
 
+**Reset** — Verwijdert alle beschrijvingen en tags uit Immich.
+
+#### Meerdere Ollama-instanties
+
+Onder **Instellingen → Ollama instanties (fotoanalyse)** kunnen meerdere Ollama-servers worden toegevoegd, elk met een eigen naam, URL en model. Foto's worden verdeeld via round-robin over de instanties. Het veld **Gelijktijdig per instantie** bepaalt hoeveel foto's elke server tegelijk verwerkt — het totale aantal gelijktijdige foto's is dus `N instanties × gelijktijdig per instantie`.
+
+Zonder geconfigureerde instanties wordt de standaard Ollama-instelling gebruikt.
+
 Per foto in de feed is zichtbaar:
 - Thumbnail
 - Status (Wachten / Thumbnail ophalen / Analyseren / Opslaan / Klaar / Fout)
+- Welke Ollama-instantie de foto verwerkt
 - Gegenereerde beschrijving en tags
 - Bevestiging zodra beschrijving en/of tags zijn opgeslagen in Immich
 - Foutmelding bij een probleem (andere foto's gaan gewoon door)
+
+Na afloop of bij stoppen verschijnt een overzicht van het aantal verwerkte foto's per instantie.
 
 ### Configuratie
 
@@ -175,7 +186,14 @@ Alle beschikbare instellingen:
     "TagGeneratorPrompt": "Je bent een expert in het organiseren van fotobibliotheken. ...",
     "ImageModel": "llava",
     "ImagePrompt": "Look at this photo carefully. ...",
-    "TagExistingPrompt": "Look at this photo carefully. Below is a list of existing tags. ..."
+    "TagExistingPrompt": "Look at this photo carefully. Below is a list of existing tags. ...",
+    "ImageInstances": [
+      {
+        "DisplayName": "GPU-server",
+        "BaseUrl": "http://192.168.1.10:11434",
+        "Model": "llava"
+      }
+    ]
   },
   "ImageAnalysis": {
     "FeedSize": 10,
@@ -184,6 +202,8 @@ Alle beschikbare instellingen:
   }
 }
 ```
+
+`ImageInstances` is optioneel. Laat het weg of leeg (`[]`) om de standaard `BaseUrl` en `ImageModel` te gebruiken. Instanties kunnen ook worden beheerd via de Instellingen-pagina in de UI; wijzigingen worden opgeslagen in `appsettings.user.json`.
 
 ### Uitvoeren
 
