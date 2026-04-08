@@ -4,7 +4,7 @@
 @inject IImmichAssetService AssetService
 @inject IOllamaImageService OllamaImageService
 @inject IImmichTagService TagService
-@inject IConfiguration Configuration
+@inject ImmichTagManager.Services.IAppSettingsService SettingsService
 
 @using System.Collections.Concurrent
 @using System.Threading
@@ -216,9 +216,10 @@ else
 
     protected override void OnInitialized()
     {
-        _feedSize = int.TryParse(Configuration["ImageAnalysis:FeedSize"], out var f) ? f : 10;
-        _concurrentAssets = int.TryParse(Configuration["ImageAnalysis:ConcurrentAssets"], out var c) ? c : 2;
-        _pageSize = int.TryParse(Configuration["ImageAnalysis:PageSize"], out var p) ? p : 50;
+        var s = SettingsService.GetSettings();
+        _feedSize = s.FeedSize;
+        _concurrentAssets = s.ConcurrentAssets;
+        _pageSize = s.PageSize;
     }
 
     private async Task StartAsync()

@@ -17,8 +17,14 @@ public class OllamaTagServiceTests
         {
             Content = new StringContent(ollamaResponse, Encoding.UTF8, "application/json")
         });
-        var client = new HttpClient(handler) { BaseAddress = new Uri("http://test/") };
-        return new OllamaTagService(client, "test-model", "test-prompt", NullLogger<OllamaTagService>.Instance);
+        var settings = new FakeAppSettingsService(new AppSettings
+        {
+            OllamaBaseUrl = "http://test",
+            OllamaModel = "test-model",
+            TagPrompt = "test-prompt"
+        });
+        var client = new HttpClient(handler);
+        return new OllamaTagService(client, settings, NullLogger<OllamaTagService>.Instance);
     }
 
     [Fact]

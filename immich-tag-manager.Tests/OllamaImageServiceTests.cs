@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using ImmichTagManager.Models;
 using ImmichTagManager.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -10,11 +11,15 @@ public class OllamaImageServiceTests
 {
     private static OllamaImageService CreateService(Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
-        var client = new HttpClient(new TestHttpMessageHandler(handler))
+        var settings = new FakeAppSettingsService(new AppSettings
         {
-            BaseAddress = new Uri("http://test/")
-        };
-        return new OllamaImageService(client, "llava", "test prompt", "tag existing prompt", NullLogger<OllamaImageService>.Instance);
+            OllamaBaseUrl = "http://test",
+            OllamaImageModel = "llava",
+            ImagePrompt = "test prompt",
+            TagExistingPrompt = "tag existing prompt"
+        });
+        var client = new HttpClient(new TestHttpMessageHandler(handler));
+        return new OllamaImageService(client, settings, NullLogger<OllamaImageService>.Instance);
     }
 
     private static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK)

@@ -5,9 +5,18 @@ using Microsoft.Extensions.Logging;
 
 namespace ImmichTagManager.Services;
 
-public class ImmichAssetService(HttpClient httpClient, ILogger<ImmichAssetService> logger) : IImmichAssetService
+public class ImmichAssetService(HttpClient httpClient, IAppSettingsService settings, ILogger<ImmichAssetService> logger) : IImmichAssetService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    private HttpRequestMessage ImmichRequest(HttpMethod method, string path, HttpContent? content = null)
+    {
+        var s = settings.GetSettings();
+        var req = new HttpRequestMessage(method, s.ImmichBaseUrl.TrimEnd('/') + "/" + path.TrimStart('/'));
+        req.Headers.Add("x-api-key", s.ImmichApiKey);
+        req.Content = content;
+        return req;
+    }
 
     private async Task EnsureSuccessAsync(HttpResponseMessage response, string operation)
     {
@@ -27,7 +36,8 @@ public class ImmichAssetService(HttpClient httpClient, ILogger<ImmichAssetServic
             cancellationToken.ThrowIfCancellationRequested();
 
             var body = JsonContent.Create(new { page, size = pageSize, withExif = true });
-            var response = await httpClient.PostAsync("api/search/metadata", body, cancellationToken);
+            var response = await httpClient.SendAsync(
+                ImmichRequest(HttpMethod.Post, "api/search/metadata", body), cancellationToken);
             await EnsureSuccessAsync(response, $"POST api/search/metadata (page={page})");
 
             var result = await response.Content.ReadFromJsonAsync<ImmichAssetSearchResponse>(JsonOptions, cancellationToken);
@@ -47,7 +57,8 @@ public class ImmichAssetService(HttpClient httpClient, ILogger<ImmichAssetServic
 
     public async Task<byte[]> GetThumbnailAsync(string assetId)
     {
-        var response = await httpClient.GetAsync($"api/assets/{assetId}/thumbnail?size=preview");
+        var response = await httpClient.SendAsync(
+            ImmichRequest(HttpMethod.Get, $"api/assets/{assetId}/thumbnail?size=preview"));
         await EnsureSuccessAsync(response, $"GET api/assets/{assetId}/thumbnail");
         return await response.Content.ReadAsByteArrayAsync();
     }
@@ -55,7 +66,8 @@ public class ImmichAssetService(HttpClient httpClient, ILogger<ImmichAssetServic
     public async Task UpdateDescriptionAsync(string assetId, string description)
     {
         var body = JsonContent.Create(new { description });
-        var response = await httpClient.PutAsync($"api/assets/{assetId}", body);
+        var response = await httpClient.SendAsync(
+            ImmichRequest(HttpMethod.Put, $"api/assets/{assetId}", body));
         await EnsureSuccessAsync(response, $"PUT api/assets/{assetId}");
     }
 }

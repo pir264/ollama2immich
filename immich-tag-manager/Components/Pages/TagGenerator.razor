@@ -2,7 +2,7 @@
 @rendermode InteractiveServer
 @inject IImmichTagService ImmichService
 @inject IOllamaTagGeneratorService OllamaGeneratorService
-@inject IConfiguration Configuration
+@inject ImmichTagManager.Services.IAppSettingsService SettingsService
 
 <h1>Hiërarchie genereren</h1>
 
@@ -97,8 +97,9 @@ else if (_state == AppState.Done)
 
     protected override void OnInitialized()
     {
-        _maxTags = int.TryParse(Configuration["Ollama:MaxGeneratedTags"], out var m) ? m : 100;
-        _depth = int.TryParse(Configuration["Ollama:TagGeneratorDepth"], out var d) ? d : 3;
+        var s = SettingsService.GetSettings();
+        _maxTags = s.MaxGeneratedTags;
+        _depth = s.TagGeneratorDepth;
     }
 
     private async Task GenerateAsync()

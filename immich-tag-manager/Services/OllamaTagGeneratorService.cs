@@ -5,17 +5,18 @@ using Microsoft.Extensions.Logging;
 
 namespace ImmichTagManager.Services;
 
-public class OllamaTagGeneratorService(HttpClient httpClient, string model, string promptTemplate, ILogger<OllamaTagGeneratorService> logger) : IOllamaTagGeneratorService
+public class OllamaTagGeneratorService(HttpClient httpClient, IAppSettingsService settings, ILogger<OllamaTagGeneratorService> logger) : IOllamaTagGeneratorService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     public async Task<List<string[]>> GenerateTagHierarchyAsync(int maxTags, int depth)
     {
-        var prompt = string.Format(promptTemplate, maxTags, depth);
+        var s = settings.GetSettings();
+        var prompt = string.Format(s.TagGeneratorPrompt, maxTags, depth);
         var schema = BuildSchema(maxTags);
-        var request = new OllamaTextRequest(model, prompt, false, schema, new { temperature = 0 });
+        var request = new OllamaTextRequest(s.OllamaModel, prompt, false, schema, new { temperature = 0 });
 
-        var response = await httpClient.PostAsJsonAsync("api/generate", request);
+        var response = await httpClient.PostAsJsonAsync(s.OllamaBaseUrl.TrimEnd('/') + "/api/generate", request);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync();

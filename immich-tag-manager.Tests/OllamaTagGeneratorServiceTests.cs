@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using ImmichTagManager.Models;
 using ImmichTagManager.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -16,8 +17,14 @@ public class OllamaTagGeneratorServiceTests
         {
             Content = new StringContent(ollamaResponse, Encoding.UTF8, "application/json")
         });
-        var client = new HttpClient(handler) { BaseAddress = new Uri("http://test/") };
-        return new OllamaTagGeneratorService(client, "test-model", "prompt {0} diepte {1}", NullLogger<OllamaTagGeneratorService>.Instance);
+        var settings = new FakeAppSettingsService(new AppSettings
+        {
+            OllamaBaseUrl = "http://test",
+            OllamaModel = "test-model",
+            TagGeneratorPrompt = "prompt {0} diepte {1}"
+        });
+        var client = new HttpClient(handler);
+        return new OllamaTagGeneratorService(client, settings, NullLogger<OllamaTagGeneratorService>.Instance);
     }
 
     [Fact]

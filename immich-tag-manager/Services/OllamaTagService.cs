@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ImmichTagManager.Services;
 
-public class OllamaTagService(HttpClient httpClient, string model, string prompt, ILogger<OllamaTagService> logger) : IOllamaTagService
+public class OllamaTagService(HttpClient httpClient, IAppSettingsService settings, ILogger<OllamaTagService> logger) : IOllamaTagService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -63,11 +63,12 @@ public class OllamaTagService(HttpClient httpClient, string model, string prompt
 
     public async Task<OllamaTagAnalysis> AnalyzeTagsAsync(IList<ImmichTag> tags)
     {
+        var s = settings.GetSettings();
         var tagList = string.Join("\n", tags.Select(t => $"- {t.Name}"));
-        var fullPrompt = $"{prompt}\n\nTags:\n{tagList}";
+        var fullPrompt = $"{s.TagPrompt}\n\nTags:\n{tagList}";
 
-        var request = new OllamaTextRequest(model, fullPrompt, false, Schema, new { temperature = 0 });
-        var response = await httpClient.PostAsJsonAsync("api/generate", request);
+        var request = new OllamaTextRequest(s.OllamaModel, fullPrompt, false, Schema, new { temperature = 0 });
+        var response = await httpClient.PostAsJsonAsync(s.OllamaBaseUrl.TrimEnd('/') + "/api/generate", request);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync();

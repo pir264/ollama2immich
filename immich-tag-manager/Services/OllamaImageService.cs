@@ -7,9 +7,7 @@ namespace ImmichTagManager.Services;
 
 public class OllamaImageService(
     HttpClient httpClient,
-    string model,
-    string prompt,
-    string tagExistingPrompt,
+    IAppSettingsService settings,
     ILogger<OllamaImageService> logger)
     : IOllamaImageService
 {
@@ -40,10 +38,11 @@ public class OllamaImageService(
 
     public async Task<(string Description, string[] Tags)> AnalyzeImageAsync(byte[] imageBytes)
     {
+        var s = settings.GetSettings();
         var base64 = Convert.ToBase64String(imageBytes);
-        var request = new OllamaImageRequest(model, prompt, [base64], Stream: false, Format: AnalyzeSchema, Options: Options);
+        var request = new OllamaImageRequest(s.OllamaImageModel, s.ImagePrompt, [base64], Stream: false, Format: AnalyzeSchema, Options: Options);
 
-        var response = await httpClient.PostAsJsonAsync("api/generate", request);
+        var response = await httpClient.PostAsJsonAsync(s.OllamaBaseUrl.TrimEnd('/') + "/api/generate", request);
         response.EnsureSuccessStatusCode();
 
         var result = await response.Content.ReadFromJsonAsync<OllamaImageResponse>(JsonOptions);
@@ -62,12 +61,13 @@ public class OllamaImageService(
 
     public async Task<string[]> SelectTagsAsync(byte[] imageBytes, string[] tagNames)
     {
+        var s = settings.GetSettings();
         var tagList = string.Join("\n", tagNames.Select(t => $"- {t}"));
-        var fullPrompt = $"{tagExistingPrompt}\n\nBeschikbare tags:\n{tagList}";
+        var fullPrompt = $"{s.TagExistingPrompt}\n\nBeschikbare tags:\n{tagList}";
         var base64 = Convert.ToBase64String(imageBytes);
-        var request = new OllamaImageRequest(model, fullPrompt, [base64], Stream: false, Format: SelectSchema, Options: Options);
+        var request = new OllamaImageRequest(s.OllamaImageModel, fullPrompt, [base64], Stream: false, Format: SelectSchema, Options: Options);
 
-        var response = await httpClient.PostAsJsonAsync("api/generate", request);
+        var response = await httpClient.PostAsJsonAsync(s.OllamaBaseUrl.TrimEnd('/') + "/api/generate", request);
         response.EnsureSuccessStatusCode();
 
         var result = await response.Content.ReadFromJsonAsync<OllamaImageResponse>(JsonOptions);

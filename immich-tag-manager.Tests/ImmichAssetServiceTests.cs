@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using ImmichTagManager.Models;
 using ImmichTagManager.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -10,11 +11,9 @@ public class ImmichAssetServiceTests
 {
     private static ImmichAssetService CreateService(Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
-        var client = new HttpClient(new TestHttpMessageHandler(handler))
-        {
-            BaseAddress = new Uri("http://test/")
-        };
-        return new ImmichAssetService(client, NullLogger<ImmichAssetService>.Instance);
+        var settings = new FakeAppSettingsService(new AppSettings { ImmichBaseUrl = "http://test", ImmichApiKey = "test-key" });
+        var client = new HttpClient(new TestHttpMessageHandler(handler));
+        return new ImmichAssetService(client, settings, NullLogger<ImmichAssetService>.Instance);
     }
 
     private static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK)

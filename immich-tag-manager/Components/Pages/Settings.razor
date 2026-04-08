@@ -1,0 +1,221 @@
+@page "/instellingen"
+@rendermode InteractiveServer
+@inject ImmichTagManager.Services.IAppSettingsService SettingsService
+@inject ImmichTagManager.Services.IOllamaModelsService OllamaModelsService
+
+<h1>Instellingen</h1>
+
+@if (_saved)
+{
+    <div style="background:#d4edda;color:#155724;padding:0.5rem 1rem;border-radius:4px;margin-bottom:1rem;">
+        Instellingen opgeslagen. Wijzigingen zijn direct actief.
+    </div>
+}
+@if (_errors.Count > 0)
+{
+    <div class="error" style="margin-bottom:1rem;">
+        @foreach (var e in _errors)
+        {
+            <div>@e</div>
+        }
+    </div>
+}
+
+<h2>Immich</h2>
+<div style="display:flex;flex-direction:column;gap:0.75rem;max-width:600px;">
+    <label style="display:flex;flex-direction:column;gap:0.25rem;">
+        Server URL
+        <input @bind="_form.ImmichBaseUrl" placeholder="http://localhost:2283" style="padding:0.4rem;" />
+    </label>
+    <label style="display:flex;flex-direction:column;gap:0.25rem;">
+        API-sleutel <span style="color:#cc0000;">*</span>
+        <input type="password" @bind="_form.ImmichApiKey" style="padding:0.4rem;" />
+    </label>
+</div>
+
+<h2>Ollama</h2>
+<div style="display:flex;flex-direction:column;gap:0.75rem;max-width:600px;">
+    <label style="display:flex;flex-direction:column;gap:0.25rem;">
+        Server URL
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+            <input @bind="_form.OllamaBaseUrl" placeholder="http://localhost:11434" style="padding:0.4rem;flex:1;" />
+            <button class="btn btn-primary" @onclick="RefreshModelsAsync" disabled="@_loadingModels" style="padding:0.4rem 0.8rem;">
+                @if (_loadingModels) { <span class="spinner"></span> } Modellen ophalen
+            </button>
+        </div>
+    </label>
+
+    <label style="display:flex;flex-direction:column;gap:0.25rem;">
+        Model (tag-analyse)
+        @ModelSelector(_form.OllamaModel, v => _form.OllamaModel = v)
+    </label>
+
+    <label style="display:flex;flex-direction:column;gap:0.25rem;">
+        Model (fotoanalyse)
+        @ModelSelector(_form.OllamaImageModel, v => _form.OllamaImageModel = v)
+    </label>
+
+    <label style="display:flex;flex-direction:column;gap:0.25rem;">
+        Prompt (tag-analyse) <span style="color:#cc0000;">*</span>
+        <textarea @bind="_form.TagPrompt" rows="6" style="padding:0.4rem;font-family:monospace;font-size:0.85em;"></textarea>
+    </label>
+
+    <label style="display:flex;flex-direction:column;gap:0.25rem;">
+        Prompt (taggenerator) <span style="color:#cc0000;">*</span>
+        <textarea @bind="_form.TagGeneratorPrompt" rows="6" style="padding:0.4rem;font-family:monospace;font-size:0.85em;"></textarea>
+    </label>
+
+    <label style="display:flex;flex-direction:column;gap:0.25rem;">
+        Prompt (fotoanalyse — nieuw)
+        <textarea @bind="_form.ImagePrompt" rows="5" style="padding:0.4rem;font-family:monospace;font-size:0.85em;"></textarea>
+    </label>
+
+    <label style="display:flex;flex-direction:column;gap:0.25rem;">
+        Prompt (fotoanalyse — bestaande tags)
+        <textarea @bind="_form.TagExistingPrompt" rows="5" style="padding:0.4rem;font-family:monospace;font-size:0.85em;"></textarea>
+    </label>
+
+    <div style="display:flex;gap:2rem;">
+        <label style="display:flex;flex-direction:column;gap:0.25rem;">
+            Max. gegenereerde tags
+            <input type="number" @bind="_form.MaxGeneratedTags" min="1" max="1000" style="width:7rem;padding:0.4rem;" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:0.25rem;">
+            Hiërarchiediepte (standaard)
+            <input type="number" @bind="_form.TagGeneratorDepth" min="1" max="10" style="width:7rem;padding:0.4rem;" />
+        </label>
+    </div>
+</div>
+
+<h2>Fotoanalyse</h2>
+<div style="display:flex;flex-direction:column;gap:0.75rem;max-width:600px;">
+    <div style="display:flex;gap:2rem;">
+        <label style="display:flex;flex-direction:column;gap:0.25rem;">
+            Zichtbare foto's (feed)
+            <input type="number" @bind="_form.FeedSize" min="1" max="50" style="width:7rem;padding:0.4rem;" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:0.25rem;">
+            Gelijktijdig te verwerken
+            <input type="number" @bind="_form.ConcurrentAssets" min="1" max="20" style="width:7rem;padding:0.4rem;" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:0.25rem;">
+            Paginagrootte (API)
+            <input type="number" @bind="_form.PageSize" min="10" max="200" style="width:7rem;padding:0.4rem;" />
+        </label>
+    </div>
+</div>
+
+<br />
+<button class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving">
+    @if (_saving) { <span class="spinner"></span> } Opslaan
+</button>
+
+@code {
+    private ImmichTagManager.Models.AppSettings _form = new();
+    private List<string> _availableModels = [];
+    private List<string> _errors = [];
+    private bool _loadingModels;
+    private bool _saving;
+    private bool _saved;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _form = SettingsService.GetSettings();
+        await LoadModelsAsync();
+    }
+
+    private RenderFragment ModelSelector(string currentValue, Action<string> setter) => __builder =>
+    {
+        if (_loadingModels)
+        {
+            __builder.OpenElement(0, "span");
+            __builder.AddAttribute(1, "class", "spinner");
+            __builder.CloseElement();
+        }
+        else if (_availableModels.Count > 0)
+        {
+            __builder.OpenElement(0, "select");
+            __builder.AddAttribute(1, "style", "padding:0.4rem;");
+            __builder.AddAttribute(2, "value", currentValue);
+            __builder.AddAttribute(3, "onchange", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(
+                this, e => setter(e.Value?.ToString() ?? string.Empty)));
+
+            if (!_availableModels.Contains(currentValue) && !string.IsNullOrWhiteSpace(currentValue))
+            {
+                __builder.OpenElement(4, "option");
+                __builder.AddAttribute(5, "value", currentValue);
+                __builder.AddContent(6, $"{currentValue} (huidig)");
+                __builder.CloseElement();
+            }
+
+            foreach (var model in _availableModels)
+            {
+                __builder.OpenElement(7, "option");
+                __builder.AddAttribute(8, "value", model);
+                __builder.AddContent(9, model);
+                __builder.CloseElement();
+            }
+
+            __builder.CloseElement();
+        }
+        else
+        {
+            __builder.OpenElement(0, "input");
+            __builder.AddAttribute(1, "style", "padding:0.4rem;");
+            __builder.AddAttribute(2, "placeholder", "Ollama onbereikbaar — typ modelnaam");
+            __builder.AddAttribute(3, "value", currentValue);
+            __builder.AddAttribute(4, "onchange", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(
+                this, e => setter(e.Value?.ToString() ?? string.Empty)));
+            __builder.CloseElement();
+        }
+    };
+
+    private async Task RefreshModelsAsync()
+    {
+        await LoadModelsAsync();
+    }
+
+    private async Task LoadModelsAsync()
+    {
+        _loadingModels = true;
+        _availableModels = [];
+        StateHasChanged();
+        _availableModels = await OllamaModelsService.GetAvailableModelsAsync(_form.OllamaBaseUrl);
+        _loadingModels = false;
+        StateHasChanged();
+    }
+
+    private async Task SaveAsync()
+    {
+        _errors = [];
+        _saved = false;
+
+        if (string.IsNullOrWhiteSpace(_form.ImmichApiKey))
+            _errors.Add("Immich API-sleutel is verplicht.");
+        if (string.IsNullOrWhiteSpace(_form.ImmichBaseUrl))
+            _errors.Add("Immich server URL is verplicht.");
+        if (string.IsNullOrWhiteSpace(_form.OllamaBaseUrl))
+            _errors.Add("Ollama server URL is verplicht.");
+        if (string.IsNullOrWhiteSpace(_form.TagPrompt))
+            _errors.Add("Prompt voor tag-analyse is verplicht.");
+        if (string.IsNullOrWhiteSpace(_form.TagGeneratorPrompt))
+            _errors.Add("Prompt voor taggenerator is verplicht.");
+
+        if (_errors.Count > 0) return;
+
+        _saving = true;
+        try
+        {
+            await SettingsService.SaveSettingsAsync(_form);
+            _saved = true;
+        }
+        catch (Exception ex)
+        {
+            _errors.Add($"Opslaan mislukt: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}
