@@ -15,6 +15,36 @@ public class OllamaImageService(
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
+    public async Task<bool> IsModelAvailableAsync()
+    {
+        var s = settings.GetSettings();
+        var baseUrl = (baseUrlOverride ?? s.OllamaBaseUrl).TrimEnd('/');
+        var model = modelOverride ?? s.OllamaImageModel;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var response = await httpClient.GetAsync(baseUrl + "/api/tags", cts.Token);
+            if (!response.IsSuccessStatusCode) return false;
+            var body = await response.Content.ReadAsStringAsync(cts.Token);
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("models", out var modelsEl)) return false;
+            foreach (var m in modelsEl.EnumerateArray())
+            {
+                if (!m.TryGetProperty("name", out var nameEl)) continue;
+                var name = nameEl.GetString() ?? "";
+                if (name.Equals(model, StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith(model + ":", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug("Ollama beschikbaarheidscheck mislukt voor {BaseUrl} ({Model}): {Message}", baseUrl, model, ex.Message);
+            return false;
+        }
+    }
+
     private static readonly object AnalyzeSchema = new
     {
         type = "object",

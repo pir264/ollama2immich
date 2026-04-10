@@ -105,6 +105,12 @@ else
                 <span style="margin-left:1rem;"><span class="spinner"></span></span>
             }
         </div>
+        @if (_instances.Any(i => !i.IsAvailable))
+        {
+            <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:0.4rem 0.75rem;margin-top:0.5rem;font-size:0.875em;">
+                Tijdelijk offline (wordt automatisch hervat): <strong>@string.Join(", ", _instances.Where(i => !i.IsAvailable).Select(i => i.DisplayName))</strong>
+            </div>
+        }
     }
 
     @if (_state == PageState.Running)
@@ -227,11 +233,18 @@ else
     private enum PageState { Idle, Running, Stopped, Done }
     private enum AnalysisMode { Normal, TagExisting, Reset }
 
-    private sealed record InstanceEntry(
-        string DisplayName,
-        IOllamaImageService Service,
-        SemaphoreSlim Semaphore,
-        HttpClient? OwnedHttpClient);
+    private sealed class InstanceEntry(
+        string displayName,
+        IOllamaImageService service,
+        SemaphoreSlim semaphore,
+        HttpClient? ownedHttpClient)
+    {
+        public string DisplayName { get; } = displayName;
+        public IOllamaImageService Service { get; } = service;
+        public SemaphoreSlim Semaphore { get; } = semaphore;
+        public HttpClient? OwnedHttpClient { get; } = ownedHttpClient;
+        public volatile bool IsAvailable = true;
+    }
 
     private PageState _state = PageState.Idle;
     private AnalysisMode _mode = AnalysisMode.Normal;
@@ -318,7 +331,8 @@ else
         _cts = new CancellationTokenSource();
         _state = PageState.Running;
         _ = Task.Run(_mode == AnalysisMode.Reset ? RunResetPipelineAsync : RunPipelineAsync);
-        await Task.CompletedTask;
+        if (_mode != AnalysisMode.Reset)
+            _ = Task.Run(() => RunHealthCheckAsync(_cts.Token));
     }
 
     private void StopAsync()
@@ -379,8 +393,20 @@ else
                     continue;
                 }
 
-                var entry = _instances[assetIndex % _instances.Count];
-                assetIndex++;
+                // Pick an available instance round-robin; wait if all are temporarily offline
+                InstanceEntry? entry = null;
+                while (!_cts.Token.IsCancellationRequested)
+                {
+                    var available = _instances.Where(i => i.IsAvailable).ToList();
+                    if (available.Count > 0)
+                    {
+                        entry = available[assetIndex % available.Count];
+                        assetIndex++;
+                        break;
+                    }
+                    await Task.Delay(2000, _cts.Token);
+                }
+                if (entry is null) break;
 
                 var item = new AssetProcessingItem { AssetId = asset.Id, InstanceDisplayName = entry.DisplayName };
                 AddToFeed(item);
@@ -463,6 +489,29 @@ else
         }
     }
 
+    private async Task RunHealthCheckAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30), ct);
+                var offline = _instances.Where(i => !i.IsAvailable).ToList();
+                if (offline.Count == 0) continue;
+                foreach (var entry in offline)
+                {
+                    if (ct.IsCancellationRequested) break;
+                    if (await entry.Service.IsModelAvailableAsync())
+                    {
+                        entry.IsAvailable = true;
+                        await InvokeAsync(StateHasChanged);
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
     private void AddToFeed(AssetProcessingItem item)
     {
         _feed.Add(item);
@@ -504,6 +553,13 @@ else
         catch (OperationCanceledException)
         {
             item.Status = AssetItemStatus.Skipped;
+        }
+        catch (HttpRequestException ex)
+        {
+            entry.IsAvailable = false;
+            item.ErrorMessage = $"Ollama niet bereikbaar ({entry.DisplayName}): {ex.Message}";
+            item.Status = AssetItemStatus.Failed;
+            Interlocked.Increment(ref _failed);
         }
         catch (Exception ex)
         {
