@@ -8,6 +8,7 @@
 @inject ILoggerFactory LoggerFactory
 
 @using System.Collections.Concurrent
+@using System.Diagnostics
 @using System.Threading
 
 <h1>Foto-analyse</h1>
@@ -139,14 +140,20 @@ else
                     <tr>
                         <th style="text-align:left;padding:0.3rem 0.8rem;border-bottom:1px solid #ccc;">Instantie</th>
                         <th style="text-align:right;padding:0.3rem 0.8rem;border-bottom:1px solid #ccc;">Foto's</th>
+                        <th style="text-align:right;padding:0.3rem 0.8rem;border-bottom:1px solid #ccc;">Gem. analysetijd</th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach (var kv in _instanceStats)
                     {
+                        var avgMs = kv.Value > 0 ? _instanceTotalMs[kv.Key] / kv.Value : 0;
+                        var avgDisplay = avgMs >= 1000
+                            ? $"{avgMs / 1000.0:F1} s"
+                            : $"{avgMs} ms";
                         <tr>
                             <td style="padding:0.25rem 0.8rem;">@kv.Key</td>
                             <td style="text-align:right;padding:0.25rem 0.8rem;">@kv.Value</td>
+                            <td style="text-align:right;padding:0.25rem 0.8rem;">@(kv.Value > 0 ? avgDisplay : "—")</td>
                         </tr>
                     }
                 </tbody>
@@ -249,6 +256,7 @@ else
 
     private List<InstanceEntry> _instances = [];
     private readonly Dictionary<string, int> _instanceStats = new();
+    private readonly Dictionary<string, long> _instanceTotalMs = new();
 
     protected override void OnInitialized()
     {
@@ -268,6 +276,7 @@ else
         if (s.OllamaImageInstances.Count == 0)
         {
             _instanceStats["Standaard"] = 0;
+            _instanceTotalMs["Standaard"] = 0;
             return [new InstanceEntry(
                 "Standaard",
                 OllamaImageService,
@@ -287,6 +296,7 @@ else
                 inst.BaseUrl,
                 inst.Model);
             _instanceStats[displayName] = 0;
+            _instanceTotalMs[displayName] = 0;
             pool.Add(new InstanceEntry(displayName, svc, new SemaphoreSlim(_concurrentAssets), http));
         }
         return pool;
@@ -303,6 +313,7 @@ else
         _skippedTags = 0;
         _tagCache = new ConcurrentDictionary<string, string>();
         _instanceStats.Clear();
+        _instanceTotalMs.Clear();
         _instances = BuildInstancePool();
         _cts = new CancellationTokenSource();
         _state = PageState.Running;
@@ -471,20 +482,24 @@ else
             item.Status = AssetItemStatus.Analyzing;
             await InvokeAsync(StateHasChanged);
 
+            TimeSpan analysisTime;
             if (_mode == AnalysisMode.TagExisting)
             {
-                await ProcessTagExistingAsync(item, entry.Service);
+                analysisTime = await ProcessTagExistingAsync(item, entry.Service);
             }
             else
             {
-                await ProcessNormalAsync(item, entry.Service);
+                analysisTime = await ProcessNormalAsync(item, entry.Service);
             }
 
             item.TagsSaved = true;
             item.Status = AssetItemStatus.Done;
             Interlocked.Increment(ref _processed);
             lock (_instanceStats)
+            {
                 _instanceStats[entry.DisplayName]++;
+                _instanceTotalMs[entry.DisplayName] += (long)analysisTime.TotalMilliseconds;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -503,9 +518,11 @@ else
         }
     }
 
-    private async Task ProcessNormalAsync(AssetProcessingItem item, IOllamaImageService service)
+    private async Task<TimeSpan> ProcessNormalAsync(AssetProcessingItem item, IOllamaImageService service)
     {
+        var sw = Stopwatch.StartNew();
         var (desc, tags) = await service.AnalyzeImageAsync(item.ThumbnailBytes!);
+        sw.Stop();
         item.Description = desc;
         item.Tags = tags;
 
@@ -535,12 +552,15 @@ else
 
             await TagService.AssignTagToAssetsAsync(tagId, [item.AssetId]);
         }
+        return sw.Elapsed;
     }
 
-    private async Task ProcessTagExistingAsync(AssetProcessingItem item, IOllamaImageService service)
+    private async Task<TimeSpan> ProcessTagExistingAsync(AssetProcessingItem item, IOllamaImageService service)
     {
         var tagNames = _tagCache.Keys.ToArray();
+        var sw = Stopwatch.StartNew();
         var matchedTags = await service.SelectTagsAsync(item.ThumbnailBytes!, tagNames);
+        sw.Stop();
 
         // Filter to only tags we actually have in the cache (Ollama may hallucinate)
         var validTags = matchedTags
@@ -557,6 +577,7 @@ else
             var tagId = _tagCache[tag.ToLowerInvariant()];
             await TagService.AssignTagToAssetsAsync(tagId, [item.AssetId]);
         }
+        return sw.Elapsed;
     }
 
     private static string StatusBadgeClass(AssetItemStatus status) => status switch
